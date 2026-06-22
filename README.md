@@ -1,5 +1,7 @@
 # Should I open the windows?
 
+<https://ctcpip.github.io/should-i-open-the-windows>
+
 A web app that compares indoor and outdoor conditions and gives a nuanced recommendation about natural ventilation -- not just yes or no.
 
 **The question:** given your current indoor comfort, outdoor weather, and the time of day, is it worth opening the windows?
