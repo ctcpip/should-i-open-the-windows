@@ -1,0 +1,21 @@
+{
+  "name": "should-i-open-the-windows",
+  "private": true,
+  "homepage": "https://github.com/ctcpip/should-i-open-the-windows#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ctcpip/should-i-open-the-windows.git"
+  },
+  "author": "Chris de Almeida",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test": "node test-scenarios.mjs"
+  },
+  "devDependencies": {
+    "eslint": "^9.39.4",
+    "eslint-config-ultra-mega": "^2.1.1"
+  }
+}

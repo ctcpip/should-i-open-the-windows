@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Should you open the windows? Compare indoor and outdoor conditions for a nuanced ventilation recommendation."
+    />
+    <meta name="color-scheme" content="light dark" />
+    <title>Should I open the windows?</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="header">
+        <div class="header__icon" aria-hidden="true">🪟</div>
+        <h1>Should I Open the Windows?</h1>
+        <p class="header__subtitle">
+          Compare indoor and outdoor conditions to see if natural ventilation makes sense right now.
+          Recommendations assume heating and cooling are off.
+        </p>
+      </header>
+
+      <main class="layout">
+        <section class="panel panel--inputs" aria-labelledby="inputs-heading">
+          <h2 id="inputs-heading">Your conditions</h2>
+
+          <div class="input-group input-group--full sunlight-inputs">
+            <div class="sunlight-inputs__row">
+              <div>
+                <label for="local-date">Date</label>
+                <input type="date" id="local-date" />
+              </div>
+              <div>
+                <label for="local-time">Local time</label>
+                <input type="time" id="local-time" />
+              </div>
+              <div>
+                <label for="latitude">Latitude</label>
+                <input
+                  type="number"
+                  id="latitude"
+                  min="-60"
+                  max="70"
+                  step="0.5"
+                  value="40"
+                />
+              </div>
+            </div>
+            <p class="hint" id="sunlight-hint">
+              Sunrise and sunset depend on date and latitude.
+            </p>
+          </div>
+
+          <fieldset class="unit-toggle">
+            <legend class="visually-hidden">Temperature unit</legend>
+            <label class="unit-toggle__option">
+              <input type="radio" name="unit" value="f" checked />
+              <span>°F</span>
+            </label>
+            <label class="unit-toggle__option">
+              <input type="radio" name="unit" value="c" />
+              <span>°C</span>
+            </label>
+          </fieldset>
+
+          <div class="input-grid">
+            <div class="input-group">
+              <h3>Indoors</h3>
+              <label for="indoor-temp">
+                Temperature
+                <span class="unit-label" data-unit="temp">°F</span>
+              </label>
+              <input
+                id="indoor-temp"
+                type="number"
+                inputmode="decimal"
+                step="0.1"
+                value="74"
+                required
+              />
+
+              <label for="indoor-humidity">Relative humidity (%)</label>
+              <input
+                id="indoor-humidity"
+                type="number"
+                inputmode="decimal"
+                min="0"
+                max="100"
+                step="1"
+                value="52"
+                required
+              />
+            </div>
+
+            <div class="input-group">
+              <h3>Outdoors</h3>
+              <label for="outdoor-temp">
+                Temperature
+                <span class="unit-label" data-unit="temp">°F</span>
+              </label>
+              <input
+                id="outdoor-temp"
+                type="number"
+                inputmode="decimal"
+                step="0.1"
+                value="68"
+                required
+              />
+
+              <label for="outdoor-humidity">Relative humidity (%)</label>
+              <input
+                id="outdoor-humidity"
+                type="number"
+                inputmode="decimal"
+                min="0"
+                max="100"
+                step="1"
+                value="45"
+                required
+              />
+            </div>
+          </div>
+
+          <div class="input-group input-group--full">
+            <label for="weather">Weather</label>
+            <select id="weather">
+              <option value="clear">Clear / sunny</option>
+              <option value="partly-cloudy">Partly cloudy</option>
+              <option value="cloudy">Cloudy / overcast</option>
+              <option value="rainy">Rainy / stormy</option>
+              <option value="windy">Windy / breezy</option>
+            </select>
+            <p class="hint">
+              Weather affects solar heating on the building, rain-driven humidity, and how quickly
+              air will exchange.
+            </p>
+          </div>
+
+          <div class="input-group input-group--full comfort-range">
+            <div class="comfort-range__header">
+              <label>Comfortable indoor temperature</label>
+              <output id="comfort-range-display">67°F-73°F</output>
+            </div>
+            <div class="comfort-range__slider">
+              <label for="comfort-min">Coolest OK</label>
+              <input
+                type="range"
+                id="comfort-min"
+                min="60"
+                max="80"
+                step="1"
+                value="67"
+              />
+            </div>
+            <div class="comfort-range__slider">
+              <label for="comfort-max">Warmest OK</label>
+              <input
+                type="range"
+                id="comfort-max"
+                min="60"
+                max="80"
+                step="1"
+                value="73"
+              />
+            </div>
+            <p class="hint" id="comfort-range-hint">
+              Recommendations assume you want to stay within this range and keep indoor humidity
+              at or below about 50% when possible — above that often feels stuffy even at a
+              comfortable temperature.
+            </p>
+          </div>
+
+          <button type="button" class="btn-primary" id="evaluate-btn">
+            Evaluate conditions
+          </button>
+          <p class="hint ventilation-note">
+            Turn off heating or cooling before opening windows — running HVAC while ventilating
+            wastes energy and fights the outdoor air.
+          </p>
+          <p id="validation-error" class="validation-error" role="alert" hidden></p>
+        </section>
+
+        <section
+          class="panel panel--results"
+          aria-labelledby="results-heading"
+          aria-live="polite"
+        >
+          <h2 id="results-heading">Recommendation</h2>
+
+          <div id="results-placeholder" class="results-placeholder">
+            <p>Enter your indoor and outdoor readings, then evaluate to see a detailed recommendation.</p>
+          </div>
+
+          <article id="results" class="results" hidden>
+            <div class="verdict" id="verdict">
+              <span class="verdict__badge" id="verdict-badge"></span>
+              <h3 class="verdict__headline" id="verdict-headline"></h3>
+              <p class="verdict__summary" id="verdict-summary"></p>
+            </div>
+
+            <div class="metrics" id="metrics"></div>
+
+            <ul class="factors" id="factors"></ul>
+          </article>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <p>
+          Uses dew point and comfort heuristics — not a substitute for local air-quality alerts,
+          allergies, or security. When in doubt, crack windows briefly instead of wide open.
+          Always turn off heating or cooling before ventilating.
+        </p>
+      </footer>
+    </div>
+
+    <script src="app.mjs"></script>
+  </body>
+</html>
