@@ -3,11 +3,11 @@ import {
   COMFORT_DEFAULT_MIN_F,
   COMFORT_MIN_SPAN_F,
   DEFAULT_LATITUDE_DEG,
+  DEFAULT_LONGITUDE_DEG,
   buildHeadline,
   buildSummary,
   comfortBoundsFromLegacyTarget,
   describeSunlightWindow,
-  estimateLongitudeDeg,
   evaluateConditions,
   formatComfortRange,
   formatDewPointDifference,
@@ -176,7 +176,7 @@ function initSunlightInputs() {
   }
 
   if (elements.longitude && !elements.longitude.value) {
-    elements.longitude.value = String(Math.round(estimateLongitudeDeg(now) * 10) / 10);
+    elements.longitude.value = String(DEFAULT_LONGITUDE_DEG);
   }
 
   updateSunlightHint();

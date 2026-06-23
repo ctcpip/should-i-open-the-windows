@@ -276,7 +276,8 @@ function buildCoolingOutlook({
   return `At the ${floorLabel} (${setup}), expect about ${adjustedText}.`;
 }
 
-const DEFAULT_LATITUDE_DEG = 40;
+const DEFAULT_LATITUDE_DEG = 41.879539;
+const DEFAULT_LONGITUDE_DEG = -87.624039;
 const TWILIGHT_MINUTES = 30;
 
 function normalizeMinutesOfDay(minutes) {
@@ -2046,6 +2047,7 @@ export {
   VENTILATION_MAX_SHIFT_F,
   INTERNAL_GAIN_SHIFT_F,
   DEFAULT_LATITUDE_DEG,
+  DEFAULT_LONGITUDE_DEG,
   DEFAULT_HOME_PROFILE,
   TWILIGHT_MINUTES,
   VERDICTS,
