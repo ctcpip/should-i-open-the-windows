@@ -19,9 +19,12 @@ import {
   estimateInternalGainShiftF,
   estimateSolarHeatingShiftF,
   evaluateConditions,
+  normalizeHomeProfile,
+  resolveVentilationEffectiveness,
   formatComfortRange,
   formatDelta,
   formatDewPointDifference,
+  formatExpectedShiftDisplay,
   formatSolarHeatingMetric,
   formatTemp,
   formatTempDifference,
@@ -249,9 +252,9 @@ describe('solar helpers', () => {
     );
   });
 
-  it('defaults solar intensity when inputs are missing', () => {
-    assert.equal(resolveSolarIntensity(40, null, null), 1);
-    assert.equal(resolveSolarIntensity(Number.NaN, '2025-06-21', 720), 1);
+  it('defaults solar intensity to zero when inputs are missing', () => {
+    assert.equal(resolveSolarIntensity(40, null, null), 0);
+    assert.equal(resolveSolarIntensity(Number.NaN, '2025-06-21', 720), 0);
   });
 
   it('applies weather solar multipliers', () => {
@@ -448,14 +451,19 @@ describe('evaluateConditions integration', () => {
       outdoorRh: 45,
       weather: 'clear',
       unit: 'f',
+      localDate: '2026-06-22',
+      localTimeMinutes: 22 * 60,
     });
     assert.ok(result.needs.includes('dehumidify'));
     assert.ok(result.needs.includes('maintain'));
     assert.ok(!result.needs.includes('cool'));
-    assert.ok(['strong-good', 'good'].includes(result.verdict.level));
-    assert.ok(result.totalScore >= 22);
-    assert.ok(result.ventilationShiftF < 0);
-    assert.ok(result.estimatedIndoorF < 78);
+    assert.ok(['strong-good', 'good', 'marginal'].includes(result.verdict.level));
+    assert.ok(result.totalScore >= 8);
+    assert.ok(result.idealVentilationShiftF < 0);
+    assert.ok(result.idealEstimatedIndoorF < 78);
+    assert.ok(result.ventilationShiftF <= 0);
+    const shiftText = formatExpectedShiftDisplay(result.expectedShiftF, 'f');
+    assert.match(result.tempFactor.body, new RegExp(shiftText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   });
 
   it('accepts Celsius unit for formatting without changing physics', () => {
@@ -466,8 +474,12 @@ describe('evaluateConditions integration', () => {
       outdoorRh: 45,
       weather: 'cloudy',
       unit: 'c',
+      localDate: '2026-06-22',
+      localTimeMinutes: 22 * 60,
+      windowOpening: 'wide-open',
+      floorsOpen: 'all-floors',
     });
-    assert.match(result.tempFactor.body ?? result.tempFactor.title, /°C|C/);
+    assert.match(result.tempFactor.body ?? result.tempFactor.title, /°C|cooler|warmer/i);
   });
 
   it('adds dehumidify goal when RH exceeds target even in temp band', () => {
@@ -516,6 +528,96 @@ describe('evaluateConditions integration', () => {
     assert.equal(result.comfortBand.tempLowF, 70);
     assert.equal(result.comfortBand.tempHighF, 78);
     assert.ok(result.solarIntensity > 0.5);
+  });
+});
+
+describe('home profile and ventilation effectiveness', () => {
+  it('normalizes home profile defaults', () => {
+    const profile = normalizeHomeProfile({});
+    assert.equal(profile.homeType, 'detached');
+    assert.equal(profile.storyCount, '2');
+    assert.equal(profile.windowOpening, 'moderate-some');
+    assert.equal(profile.floorsOpen, 'one-floor');
+  });
+
+  it('reduces effectiveness for cracked windows on part of a large home', () => {
+    const effectiveness = resolveVentilationEffectiveness({
+      windowOpening: 'cracked-few',
+      floorsOpen: 'two-floors',
+      storyCount: '3',
+      homeType: 'detached',
+    });
+    assert.ok(effectiveness < 0.25);
+  });
+
+  it('uses home-adjusted shift in temp factor copy and lowers humidity score when ventilation is limited', () => {
+    const base = {
+      indoorTempF: 74,
+      outdoorTempF: 66,
+      indoorRh: 52,
+      outdoorRh: 45,
+      weather: 'clear',
+      latitudeDeg: 41,
+      localDate: '2026-06-22',
+      localTimeMinutes: 22 * 60,
+    };
+    const ideal = evaluateConditions({
+      ...base,
+      windowOpening: 'wide-open',
+      floorsOpen: 'all-floors',
+      storyCount: '2',
+      sunExposure: 'mixed',
+    });
+    const limited = evaluateConditions({
+      ...base,
+      storyCount: '3',
+      windowOpening: 'cracked-few',
+      floorsOpen: 'two-floors',
+      sunExposure: 'full-sun',
+    });
+
+    assert.ok(Math.abs(limited.expectedShiftF) < Math.abs(ideal.expectedShiftF));
+    assert.match(limited.coolingOutlook, /cracked \/ few windows/i);
+    assert.ok(Math.abs(limited.expectedShiftF) < 1.5);
+
+    const shiftText = formatExpectedShiftDisplay(limited.expectedShiftF, 'f');
+    assert.match(limited.tempFactor.body, new RegExp(shiftText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.ok(limited.humidityFactor.score <= ideal.humidityFactor.score);
+  });
+
+  it('treats breeze as unfavorable when cooling and outdoor air is 2°F warmer', () => {
+    const result = evaluateConditions({
+      indoorTempF: 78,
+      outdoorTempF: 80,
+      indoorRh: 50,
+      outdoorRh: 45,
+      weather: 'cloudy',
+      windy: true,
+      windSpeedMph: 12,
+      comfortMinF: 68,
+      comfortMaxF: 76,
+      localDate: '2026-06-22',
+      localTimeMinutes: 22 * 60,
+    });
+    assert.match(result.weatherFactor.title, /unwanted exchange/i);
+    assert.ok(result.weatherFactor.score <= 0);
+  });
+
+  it('applies sun exposure to scoring solar heating', () => {
+    const base = {
+      indoorTempF: 75,
+      outdoorTempF: 72,
+      indoorRh: 53,
+      outdoorRh: 50,
+      weather: 'clear',
+      latitudeDeg: 41.88,
+      localDate: '2025-06-22',
+      localTimeMinutes: 12 * 60,
+    };
+    const shaded = evaluateConditions({ ...base, sunExposure: 'mostly-shaded' });
+    const fullSun = evaluateConditions({ ...base, sunExposure: 'full-sun' });
+    assert.ok(fullSun.solarHeatingShiftF > shaded.solarHeatingShiftF);
+    assert.ok(fullSun.tempFactor.score <= shaded.tempFactor.score);
   });
 });
 

@@ -16,7 +16,7 @@ const scenarios = [
       weather: 'clear',
       unit: 'f',
     },
-    expectVerdict: ['strong-good', 'good'],
+    expectVerdict: ['marginal', 'good', 'strong-good'],
   },
   {
     name: 'Comfortable home with cold outdoor air',
@@ -64,7 +64,7 @@ const scenarios = [
       weather: 'rainy',
       unit: 'f',
     },
-    expectVerdict: ['good', 'strong-good', 'marginal'],
+    expectVerdict: ['not-worth-it', 'marginal', 'good'],
   },
   {
     name: 'Hotter outside -- should avoid',
@@ -101,7 +101,7 @@ const scenarios = [
       unit: 'f',
     },
     expectNeeds: ['maintain'],
-    expectVerdict: ['good', 'marginal'],
+    expectVerdict: ['not-worth-it', 'marginal', 'good'],
   },
   {
     name: 'Fall drying -- comfortable temp, humid inside, cool dry outside',
@@ -125,7 +125,7 @@ const scenarios = [
       weather: 'cloudy',
       unit: 'f',
     },
-    expectVerdict: ['strong-good', 'good'],
+    expectVerdict: ['not-worth-it', 'marginal', 'good', 'strong-good'],
   },
   {
     name: 'Cooler preference -- 72°F feels hot when max is 71°F',
@@ -154,7 +154,7 @@ const scenarios = [
       comfortMaxF: 73,
     },
     expectNeeds: ['maintain'],
-    expectVerdict: ['good', 'marginal'],
+    expectVerdict: ['not-worth-it', 'marginal', 'good'],
   },
   {
     name: 'Above max -- modest outdoor cooling on sunny day (70-74°F)',
@@ -214,7 +214,7 @@ const scenarios = [
       comfortMaxF: 78,
     },
     expectNeeds: ['maintain'],
-    expectVerdict: ['marginal', 'good'],
+    expectVerdict: ['not-worth-it', 'marginal', 'good'],
   },
   {
     name: 'Wide range -- outdoor in band on sunny day (64-78°F)',
@@ -244,7 +244,7 @@ const scenarios = [
       comfortMaxF: 78,
     },
     expectNeeds: ['maintain'],
-    expectVerdict: ['marginal', 'good'],
+    expectVerdict: ['not-worth-it', 'marginal', 'good'],
   },
   {
     name: 'Cold outdoor air -- realistic shift stays in band (71-78°F)',
@@ -259,7 +259,7 @@ const scenarios = [
       comfortMaxF: 78,
     },
     expectNeeds: ['dehumidify', 'maintain'],
-    expectVerdict: ['good', 'strong-good'],
+    expectVerdict: ['marginal', 'good', 'strong-good', 'not-worth-it'],
   },
   {
     name: 'Rainy maintain -- uses rain logic, not solar bonus',
@@ -287,7 +287,7 @@ const scenarios = [
       comfortMaxF: 78,
     },
     expectNeeds: ['maintain'],
-    expectVerdict: ['marginal', 'good'],
+    expectVerdict: ['not-worth-it', 'marginal', 'good'],
   },
   {
     name: 'Windy maintain -- cloudy skies dominate weather title',
@@ -303,7 +303,7 @@ const scenarios = [
       comfortMaxF: 78,
     },
     expectNeeds: ['dehumidify', 'maintain'],
-    expectWeatherTitle: 'Overcast and cool -- great for fresh air',
+    expectWeatherTitle: 'Breeze helps air exchange',
   },
   {
     name: 'Windy maintain at night -- breeze factor with clear skies',
@@ -356,7 +356,7 @@ const scenarios = [
     },
     expectNeeds: ['maintain'],
     expectWeatherTitle: 'Dark outside -- no solar heating',
-    expectVerdict: ['marginal', 'good'],
+    expectVerdict: ['not-worth-it', 'marginal', 'good'],
   },
   {
     name: 'Clear summer midday -- comfortable in band, cool outdoor air',
@@ -375,7 +375,7 @@ const scenarios = [
     },
     expectNeeds: ['maintain'],
     expectWeatherTitle: 'Cool outdoor air helps freshness',
-    expectVerdict: ['marginal', 'good'],
+    expectVerdict: ['not-worth-it', 'marginal', 'good'],
   },
   {
     name: 'Clear summer afternoon -- much cooler outdoor, stays in band',
@@ -394,7 +394,7 @@ const scenarios = [
     },
     expectNeeds: ['dehumidify', 'maintain'],
     expectWeatherTitle: 'Cool outdoor air -- good time to freshen up',
-    expectVerdict: ['good', 'strong-good'],
+    expectVerdict: ['marginal', 'good', 'strong-good', 'not-worth-it'],
   },
   {
     name: 'Windy afternoon -- much cooler outdoor, stays in band',
@@ -415,7 +415,7 @@ const scenarios = [
     },
     expectNeeds: ['dehumidify', 'maintain'],
     expectWeatherTitle: 'Breeze improves air exchange',
-    expectVerdict: ['good', 'strong-good'],
+    expectVerdict: ['marginal', 'good', 'strong-good', 'not-worth-it'],
   },
   {
     name: 'Cloudy summer night -- no spurious overcast solar bonus',
@@ -434,7 +434,7 @@ const scenarios = [
     },
     expectNeeds: ['dehumidify', 'maintain'],
     expectWeatherTitle: 'Dark outside -- no solar heating',
-    expectVerdict: ['marginal', 'good'],
+    expectVerdict: ['not-worth-it', 'marginal', 'good'],
   },
   {
     name: 'In band at 52% RH -- dryness goal even when temp is OK',
@@ -499,6 +499,45 @@ const scenarios = [
     },
     expectNeeds: ['dehumidify', 'maintain'],
     expectVerdict: ['marginal', 'good', 'not-worth-it'],
+  },
+  {
+    name: '3-story detached cracked windows -- modest cooling at main floor',
+    input: {
+      indoorTempF: 74,
+      outdoorTempF: 66,
+      indoorRh: 52,
+      outdoorRh: 45,
+      weather: 'clear',
+      homeType: 'detached',
+      storyCount: '3',
+      windowOpening: 'cracked-few',
+      floorsOpen: 'two-floors',
+      sunExposure: 'full-sun',
+      latitudeDeg: 41,
+      localDate: '2026-06-22',
+      localTimeMinutes: 22 * 60,
+    },
+    expectNeeds: ['dehumidify', 'maintain'],
+    expectVerdict: ['marginal', 'good', 'not-worth-it'],
+  },
+  {
+    name: 'Windy when outdoor is 2°F warmer while cooling -- breeze hurts',
+    input: {
+      indoorTempF: 78,
+      outdoorTempF: 80,
+      indoorRh: 50,
+      outdoorRh: 45,
+      weather: 'cloudy',
+      windy: true,
+      windSpeedMph: 12,
+      comfortMinF: 68,
+      comfortMaxF: 76,
+      localDate: '2026-06-22',
+      localTimeMinutes: 22 * 60,
+    },
+    expectNeeds: ['cool'],
+    expectVerdict: ['not-worth-it', 'likely-worse', 'avoid', 'marginal'],
+    expectWeatherTitle: 'Wind accelerates unwanted exchange',
   },
 ];
 

@@ -23,21 +23,14 @@
       </header>
 
       <main class="layout">
-        <section class="panel panel--inputs" aria-labelledby="inputs-heading">
-          <h2 id="inputs-heading">Your conditions</h2>
+          <section class="panel panel--home" aria-labelledby="home-heading">
+            <h2 id="home-heading">Home information</h2>
+            <p class="panel__intro">
+              Set once -- location drives sunrise and sunset; building details and your comfort
+              range refine recommendations and the temperature outlook.
+            </p>
 
-          <div class="input-group input-group--full sunlight-inputs">
-            <div class="sunlight-inputs__row sunlight-inputs__row--datetime">
-              <div>
-                <label for="local-date">Date</label>
-                <input type="date" id="local-date" />
-              </div>
-              <div>
-                <label for="local-time">Local time</label>
-                <input type="time" id="local-time" />
-              </div>
-            </div>
-            <div class="sunlight-inputs__row sunlight-inputs__row--coords">
+            <div class="field-grid field-grid--coords">
               <div>
                 <label for="latitude">Latitude</label>
                 <input
@@ -60,8 +53,85 @@
                 />
               </div>
             </div>
+
+            <div class="field-grid">
+              <div>
+                <label for="home-type">Home type</label>
+                <select id="home-type">
+                  <option value="detached" selected>Single-family detached</option>
+                  <option value="row-twin">Row house / duplex</option>
+                  <option value="apartment">Apartment / condo</option>
+                </select>
+              </div>
+              <div>
+                <label for="story-count">Stories</label>
+                <select id="story-count">
+                  <option value="1">1 story</option>
+                  <option value="2" selected>2 stories</option>
+                  <option value="3">3+ (incl. finished basement)</option>
+                </select>
+              </div>
+              <div class="field-grid__full">
+                <label for="sun-exposure">Sun on the building</label>
+                <select id="sun-exposure">
+                  <option value="mostly-shaded">Mostly shaded</option>
+                  <option value="mixed" selected>Mixed sun and shade</option>
+                  <option value="full-sun">Mostly full sun</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="input-group input-group--full comfort-range">
+              <div class="comfort-range__header">
+                <label>Comfortable indoor temperature</label>
+                <output id="comfort-range-display">68°F-78°F</output>
+              </div>
+              <div class="comfort-range__slider">
+                <label for="comfort-min">Coolest OK</label>
+                <input
+                  type="range"
+                  id="comfort-min"
+                  min="60"
+                  max="80"
+                  step="1"
+                  value="68"
+                />
+              </div>
+              <div class="comfort-range__slider">
+                <label for="comfort-max">Warmest OK</label>
+                <input
+                  type="range"
+                  id="comfort-max"
+                  min="60"
+                  max="80"
+                  step="1"
+                  value="78"
+                />
+              </div>
+              <p class="hint" id="comfort-range-hint">
+                Recommendations assume you want to stay within this range and keep indoor humidity
+                at or below about 50% when possible -- above that often feels stuffy even at a
+                comfortable temperature.
+              </p>
+            </div>
+          </section>
+
+          <section class="panel panel--inputs" aria-labelledby="inputs-heading">
+            <h2 id="inputs-heading">Your conditions</h2>
+
+            <div class="input-group input-group--full sunlight-inputs">
+            <div class="sunlight-inputs__row sunlight-inputs__row--datetime">
+              <div>
+                <label for="local-date">Date</label>
+                <input type="date" id="local-date" />
+              </div>
+              <div>
+                <label for="local-time">Local time</label>
+                <input type="time" id="local-time" />
+              </div>
+            </div>
             <p class="hint" id="sunlight-hint">
-              Sunrise and sunset depend on date, latitude, and longitude.
+              Sunrise and sunset depend on date and your home location.
             </p>
           </div>
 
@@ -168,37 +238,28 @@
             </div>
           </div>
 
-          <div class="input-group input-group--full comfort-range">
-            <div class="comfort-range__header">
-              <label>Comfortable indoor temperature</label>
-              <output id="comfort-range-display">68°F-78°F</output>
+          <div class="input-group input-group--full ventilation-settings">
+            <h3>Ventilation</h3>
+            <div class="field-grid">
+              <div>
+                <label for="window-opening">Window opening</label>
+                <select id="window-opening">
+                  <option value="cracked-few">Cracked / a few windows</option>
+                  <option value="moderate-some" selected>Moderate / several windows</option>
+                  <option value="wide-open">Wide open / cross-breeze</option>
+                </select>
+              </div>
+              <div>
+                <label for="floors-open">Floors with open windows</label>
+                <select id="floors-open">
+                  <option value="one-floor" selected>One floor only</option>
+                  <option value="two-floors">Two floors</option>
+                  <option value="all-floors">All floors</option>
+                </select>
+              </div>
             </div>
-            <div class="comfort-range__slider">
-              <label for="comfort-min">Coolest OK</label>
-              <input
-                type="range"
-                id="comfort-min"
-                min="60"
-                max="80"
-                step="1"
-                value="68"
-              />
-            </div>
-            <div class="comfort-range__slider">
-              <label for="comfort-max">Warmest OK</label>
-              <input
-                type="range"
-                id="comfort-max"
-                min="60"
-                max="80"
-                step="1"
-                value="78"
-              />
-            </div>
-            <p class="hint" id="comfort-range-hint">
-              Recommendations assume you want to stay within this range and keep indoor humidity
-              at or below about 50% when possible -- above that often feels stuffy even at a
-              comfortable temperature.
+            <p class="hint">
+              Affects the temperature outlook -- not whether outdoor air looks favorable overall.
             </p>
           </div>
 
@@ -228,6 +289,11 @@
               <span class="verdict__badge" id="verdict-badge"></span>
               <h3 class="verdict__headline" id="verdict-headline"></h3>
               <p class="verdict__summary" id="verdict-summary"></p>
+            </div>
+
+            <div class="cooling-outlook" id="cooling-outlook">
+              <h4 class="cooling-outlook__title">Temperature outlook</h4>
+              <p class="cooling-outlook__text" id="cooling-outlook-text"></p>
             </div>
 
             <div class="metrics" id="metrics"></div>

@@ -51,6 +51,231 @@ function formatComfortRange(tempLowF, tempHighF, unit) {
 const VENTILATION_MAX_SHIFT_F = 18;
 /** Typical occupied-home heat (people, pets, appliances) added to expected shift when HVAC is off. */
 const INTERNAL_GAIN_SHIFT_F = 1.25;
+
+const HOME_TYPES = new Set(['detached', 'row-twin', 'apartment']);
+const STORY_COUNTS = new Set(['1', '2', '3']);
+const WINDOW_OPENINGS = new Set(['cracked-few', 'moderate-some', 'wide-open']);
+const FLOORS_OPEN = new Set(['one-floor', 'two-floors', 'all-floors']);
+const SUN_EXPOSURES = new Set(['mostly-shaded', 'mixed', 'full-sun']);
+const TEMP_MEASUREMENT_FLOORS = new Set(['basement', 'main', 'upper']);
+
+const DEFAULT_HOME_PROFILE = {
+  homeType: 'detached',
+  storyCount: '2',
+  windowOpening: 'moderate-some',
+  floorsOpen: 'one-floor',
+  sunExposure: 'mixed',
+  tempMeasurementFloor: 'main',
+};
+
+function normalizeHomeProfile(profile = {}) {
+  const storyCount = STORY_COUNTS.has(String(profile.storyCount))
+    ? String(profile.storyCount)
+    : DEFAULT_HOME_PROFILE.storyCount;
+  const floorsOpen = normalizeFloorsOpen(profile.floorsOpen, storyCount);
+
+  return {
+    homeType: HOME_TYPES.has(profile.homeType) ? profile.homeType : DEFAULT_HOME_PROFILE.homeType,
+    storyCount,
+    windowOpening: WINDOW_OPENINGS.has(profile.windowOpening)
+      ? profile.windowOpening
+      : DEFAULT_HOME_PROFILE.windowOpening,
+    floorsOpen,
+    sunExposure: SUN_EXPOSURES.has(profile.sunExposure)
+      ? profile.sunExposure
+      : DEFAULT_HOME_PROFILE.sunExposure,
+    tempMeasurementFloor: TEMP_MEASUREMENT_FLOORS.has(profile.tempMeasurementFloor)
+      ? profile.tempMeasurementFloor
+      : DEFAULT_HOME_PROFILE.tempMeasurementFloor,
+  };
+}
+
+function normalizeFloorsOpen(floorsOpen, storyCount) {
+  const stories = Number(storyCount) || 2;
+  if (stories <= 1) return 'one-floor';
+  if (stories === 2 && floorsOpen === 'all-floors') return 'two-floors';
+  if (FLOORS_OPEN.has(floorsOpen)) return floorsOpen;
+  return DEFAULT_HOME_PROFILE.floorsOpen;
+}
+
+function windowOpeningFactor(windowOpening) {
+  switch (windowOpening) {
+    case 'cracked-few':
+      return 0.22;
+    case 'moderate-some':
+      return 0.55;
+    case 'wide-open':
+      return 1;
+    default:
+      return 0.55;
+  }
+}
+
+function floorsOpenCount(floorsOpen, storyCount) {
+  const stories = Number(storyCount) || 2;
+  switch (floorsOpen) {
+    case 'one-floor':
+      return 1;
+    case 'two-floors':
+      return Math.min(2, stories);
+    case 'all-floors':
+      return stories;
+    default:
+      return 1;
+  }
+}
+
+function floorsOpenFactor(floorsOpen, storyCount) {
+  const stories = Number(storyCount) || 2;
+  const openCount = floorsOpenCount(floorsOpen, storyCount);
+  const ratio = Math.min(openCount / stories, 1);
+  return 0.18 + 0.82 * ratio ** 0.85;
+}
+
+function homeTypeFactor(homeType) {
+  switch (homeType) {
+    case 'detached':
+      return 1;
+    case 'row-twin':
+      return 0.85;
+    case 'apartment':
+      return 0.62;
+    default:
+      return 1;
+  }
+}
+
+function sunExposureMultiplier(sunExposure) {
+  switch (sunExposure) {
+    case 'mostly-shaded':
+      return 0.5;
+    case 'mixed':
+      return 0.8;
+    case 'full-sun':
+      return 1.15;
+    default:
+      return 0.8;
+  }
+}
+
+function measurementFloorAdjustment(tempMeasurementFloor, storyCount) {
+  const stories = Number(storyCount) || 2;
+  switch (tempMeasurementFloor) {
+    case 'basement':
+      return {
+        ventilationScale: stories >= 3 ? 0.3 : 0.45,
+        solarScale: 0.85,
+      };
+    case 'upper':
+      return {
+        ventilationScale: 0.62,
+        solarScale: 1.12,
+      };
+    case 'main':
+    default:
+      return {
+        ventilationScale: 1,
+        solarScale: 1,
+      };
+  }
+}
+
+function computeShiftAtMeasurementFloor({
+  indoorTempF,
+  idealVentilationShiftF,
+  baseSolarHeatingShiftF,
+  internalGainShiftF,
+  ventilationEffectiveness,
+  sunExposure,
+  tempMeasurementFloor,
+  storyCount,
+}) {
+  const floorAdj = measurementFloorAdjustment(tempMeasurementFloor, storyCount);
+  const sunMult = sunExposureMultiplier(sunExposure);
+  const ventilationShiftF =
+    idealVentilationShiftF * ventilationEffectiveness * floorAdj.ventilationScale;
+  const solarHeatingShiftF = baseSolarHeatingShiftF * sunMult * floorAdj.solarScale;
+  const expectedShiftF = ventilationShiftF + solarHeatingShiftF + internalGainShiftF;
+
+  return {
+    ventilationShiftF,
+    solarHeatingShiftF,
+    internalGainShiftF,
+    expectedShiftF,
+    estimatedIndoorF: indoorTempF + expectedShiftF,
+  };
+}
+
+function describeTempMeasurementFloor(floor) {
+  switch (floor) {
+    case 'basement':
+      return 'basement';
+    case 'upper':
+      return 'upper floor';
+    case 'main':
+    default:
+      return 'main floor';
+  }
+}
+
+function describeVentilationSetup(profile) {
+  const opening =
+    profile.windowOpening === 'cracked-few'
+      ? 'cracked / few windows'
+      : profile.windowOpening === 'wide-open'
+        ? 'wide-open windows'
+        : 'moderately open windows';
+  const stories = Number(profile.storyCount) || 2;
+  const openCount = floorsOpenCount(profile.floorsOpen, profile.storyCount);
+  const floorPart =
+    openCount >= stories
+      ? `all ${stories} floor${stories === 1 ? '' : 's'}`
+      : `${openCount} of ${stories} floor${stories === 1 ? '' : 's'}`;
+  return `${opening}, ${floorPart}`;
+}
+
+function buildCoolingOutlook({
+  verdict,
+  needs,
+  idealExpectedShiftF,
+  expectedShiftF,
+  ventilationEffectiveness,
+  homeProfile,
+  unit,
+}) {
+  const floorLabel = describeTempMeasurementFloor(homeProfile.tempMeasurementFloor);
+  const setup = describeVentilationSetup(homeProfile);
+  const idealText = formatExpectedShiftDisplay(idealExpectedShiftF, unit);
+  const adjustedText = formatExpectedShiftDisplay(expectedShiftF, unit);
+  const limitedSetup = ventilationEffectiveness < 0.45;
+  const negligibleShift = Math.abs(expectedShiftF) < 0.75;
+  const wantsCool = needs.includes('cool');
+  const wantsDry = needs.includes('dehumidify');
+
+  if (negligibleShift) {
+    if (limitedSetup && (wantsCool || wantsDry)) {
+      return `At the ${floorLabel} (${setup}), expect ${adjustedText} -- little thermostat movement even if outdoor air would help freshen or dry the home. Ideal mixing alone would be ${idealText}.`;
+    }
+    if (limitedSetup) {
+      return `At the ${floorLabel} (${setup}), expect ${adjustedText}. With limited window opening, whole-home temps often change slowly and unevenly by floor.`;
+    }
+    return `At the ${floorLabel}, expect ${adjustedText} if windows stay open long enough.`;
+  }
+
+  if (limitedSetup && Math.abs(idealExpectedShiftF) > Math.abs(expectedShiftF) + 1) {
+    return `At the ${floorLabel} (${setup}), expect ${adjustedText}. Outdoor air could do more with wider or cross-floor ventilation (ideal mixing: ${idealText}).`;
+  }
+
+  if (verdict.level === 'good' || verdict.level === 'strong-good') {
+    if (wantsCool && expectedShiftF > -0.5) {
+      return `Worth opening for air quality, but at the ${floorLabel} (${setup}) cooling may stay modest -- about ${adjustedText}.`;
+    }
+    return `At the ${floorLabel} (${setup}), expect about ${adjustedText} if ventilation continues.`;
+  }
+
+  return `At the ${floorLabel} (${setup}), expect about ${adjustedText}.`;
+}
+
 const DEFAULT_LATITUDE_DEG = 40;
 const TWILIGHT_MINUTES = 30;
 
@@ -209,7 +434,7 @@ function resolveSolarIntensity(
     !Number.isFinite(localTimeMinutes) ||
     !Number.isFinite(latitudeDeg)
   ) {
-    return 1;
+    return 0;
   }
   return getSolarIntensityFactor(
     latitudeDeg,
@@ -412,6 +637,32 @@ function formatExpectedShiftDisplay(shiftF, unit, { capped = false } = {}) {
   return formatVentilationShift(shiftF, unit, { capped });
 }
 
+function netShiftFromThermalContext(thermalContext, indoorTempF, outdoorTempF) {
+  if (Number.isFinite(thermalContext.expectedShiftF)) {
+    return thermalContext.expectedShiftF;
+  }
+  const airShiftF = estimateVentilationTempShiftF(indoorTempF, outdoorTempF);
+  const { solarHeatingShiftF = 0, internalGainShiftF = 0 } = thermalContext;
+  return airShiftF + solarHeatingShiftF + internalGainShiftF;
+}
+
+function formatContextualShift(thermalContext, indoorTempF, outdoorTempF, unit, options = {}) {
+  const shiftF = netShiftFromThermalContext(thermalContext, indoorTempF, outdoorTempF);
+  const capped = options.capped ?? thermalContext.ventilationShiftCapped ?? false;
+  return formatVentilationShift(shiftF, unit, { capped });
+}
+
+function scaleHumidityScoreByVentilation(score, effectiveness) {
+  if (!Number.isFinite(effectiveness) || effectiveness >= 0.98 || score === 0) return score;
+  const scaled = Math.abs(score) * (0.2 + 0.8 * effectiveness);
+  return Math.round(Math.sign(score) * scaled);
+}
+
+function limitedVentilationHumidityNote(effectiveness) {
+  if (!Number.isFinite(effectiveness) || effectiveness >= 0.45) return '';
+  return ' With limited window opening, moisture change at your floor will be slower.';
+}
+
 function scoreTemperatureMaintainBand(
   indoorTempF,
   outdoorTempF,
@@ -425,15 +676,17 @@ function scoreTemperatureMaintainBand(
     internalGainShiftF = 0,
     weather,
     solarIntensity = 0,
+    ventilationShiftCapped = false,
   } = thermalContext;
   const airShiftF = estimateVentilationTempShiftF(indoorTempF, outdoorTempF);
-  const shiftF = airShiftF + solarHeatingShiftF + internalGainShiftF;
+  const idealNetShiftF = airShiftF + solarHeatingShiftF + internalGainShiftF;
+  const shiftF = netShiftFromThermalContext(thermalContext, indoorTempF, outdoorTempF);
   const estIndoorF = indoorTempF + shiftF;
   const absShift = Math.abs(shiftF);
   const estAboveMax = estIndoorF - tempHighF;
   const estBelowMin = tempLowF - estIndoorF;
   const estInBand = estIndoorF >= tempLowF && estIndoorF <= tempHighF;
-  const shiftDesc = formatVentilationShift(shiftF, unit);
+  const shiftDesc = formatVentilationShift(shiftF, unit, { capped: ventilationShiftCapped });
   const passiveSources = describePassiveHeatingSources({
     solarHeatingShiftF,
     internalGainShiftF,
@@ -441,7 +694,13 @@ function scoreTemperatureMaintainBand(
     weather,
   });
   const outdoorNote = ` (outdoor is ${formatTemp(outdoorTempF, unit)}, but the whole home won't reach that)`;
-  const factorBase = { shiftF, airShiftF, solarHeatingShiftF, internalGainShiftF };
+  const factorBase = {
+    shiftF,
+    airShiftF,
+    solarHeatingShiftF,
+    internalGainShiftF,
+    idealNetShiftF,
+  };
 
   if (shiftF >= 0.5) {
     if (estAboveMax > 1.5) {
@@ -534,7 +793,7 @@ function scoreTemperatureMaintainBand(
     score: estInBand ? 3 : 0,
     impact: 'neutral',
     title: 'Little net temperature change',
-    body: 'Indoor and outdoor temps are close -- expect little net temperature change from ventilation.',
+    body: `Expect ${shiftDesc} indoors -- outdoor air is close to your comfort range, so ventilation mainly freshens the air.`,
     ...factorBase,
   };
 }
@@ -773,7 +1032,6 @@ function scoreTemperature(
 ) {
   const { tempLowF, tempHighF } = normalizeComfortBounds(comfortMinF, comfortMaxF);
   const delta = outdoorTempF - indoorTempF;
-  const shiftF = estimateVentilationTempShiftF(indoorTempF, outdoorTempF);
   const inComfortBand = indoorTempF >= tempLowF && indoorTempF <= tempHighF;
 
   if (needs.includes('cool')) {
@@ -786,7 +1044,7 @@ function scoreTemperature(
         score: 30,
         impact: 'help',
         title: 'Outdoor air is much cooler',
-        body: `Outdoor air is ${formatDelta(-delta, unit)} cooler -- expect ${formatVentilationShift(shiftF, unit)} indoors, though sunlight warming the home can offset some of the gain.`,
+        body: `Outdoor air is ${formatDelta(-delta, unit)} cooler -- expect ${formatContextualShift(thermalContext, indoorTempF, outdoorTempF, unit)} indoors, though sunlight warming the home can offset some of the gain.`,
       };
     }
     if (delta <= -3) {
@@ -794,7 +1052,7 @@ function scoreTemperature(
         score: 14,
         impact: 'mixed',
         title: 'Modest cooling from outdoor air',
-        body: `Outdoor air is ${formatDelta(-delta, unit)} cooler. Expect ${formatVentilationShift(shiftF, unit)} indoors -- gradual, and less than the full gap to outside.`,
+        body: `Outdoor air is ${formatDelta(-delta, unit)} cooler. Expect ${formatContextualShift(thermalContext, indoorTempF, outdoorTempF, unit)} indoors -- gradual, and less than the full gap to outside.`,
       };
     }
     if (delta <= 1) {
@@ -875,7 +1133,7 @@ function scoreTemperature(
         score: -28,
         impact: 'hurt',
         title: 'Cold outdoor air will steal heat',
-        body: `Outdoor air is about ${formatDelta(-delta, unit)} colder -- expect ${formatVentilationShift(shiftF, unit)} indoors, not a full drop to outdoor temp.`,
+        body: `Outdoor air is about ${formatDelta(-delta, unit)} colder -- expect ${formatContextualShift(thermalContext, indoorTempF, outdoorTempF, unit)} indoors, not a full drop to outdoor temp.`,
       };
     }
     return {
@@ -934,7 +1192,11 @@ function scoreTemperature(
 }
 
 function scoreHumidity(indoorTempF, indoorRh, outdoorTempF, outdoorRh, needs, thermalContext = {}) {
-  const { solarHeatingShiftF = 0, internalGainShiftF = 0 } = thermalContext;
+  const {
+    solarHeatingShiftF = 0,
+    internalGainShiftF = 0,
+    ventilationEffectiveness = 1,
+  } = thermalContext;
   const passiveHeatingShiftF = solarHeatingShiftF + internalGainShiftF;
   const absTempDelta = Math.abs(outdoorTempF - indoorTempF);
   const indoorDp = dewPointFahrenheit(indoorTempF, indoorRh);
@@ -944,8 +1206,15 @@ function scoreHumidity(indoorTempF, indoorRh, outdoorTempF, outdoorRh, needs, th
   const dpDelta =
     indoorDp === null || outdoorDp === null ? 0 : outdoorDp - indoorDp;
   const ahDelta = outdoorAh - indoorAh;
+  const ventNote = limitedVentilationHumidityNote(ventilationEffectiveness);
 
-  const withDewPoints = (factor) => ({ ...factor, indoorDp, outdoorDp });
+  const withDewPoints = (factor) => ({
+    ...factor,
+    indoorDp,
+    outdoorDp,
+    score: scaleHumidityScoreByVentilation(factor.score, ventilationEffectiveness),
+    body: `${factor.body}${ventNote && factor.score > 0 ? ventNote : ''}`,
+  });
 
   if (needs.includes('dehumidify')) {
     const aboveRhTarget = indoorRh > COMFORT.rhTargetMax;
@@ -1316,6 +1585,30 @@ function windExchangeMultiplier(windSpeedMph) {
   return 1.35;
 }
 
+function resolveVentilationEffectiveness({
+  windowOpening,
+  floorsOpen,
+  storyCount,
+  homeType,
+  windy = false,
+  windSpeedMph = null,
+}) {
+  let factor =
+    windowOpeningFactor(windowOpening) *
+    floorsOpenFactor(floorsOpen, storyCount) *
+    homeTypeFactor(homeType);
+
+  if (windy) {
+    const mph = resolveWindSpeedMph(windy, windSpeedMph);
+    if (mph !== null) {
+      const windBoost = windExchangeMultiplier(mph);
+      factor *= 0.75 + 0.25 * windBoost;
+    }
+  }
+
+  return Math.max(0.06, Math.min(1, factor));
+}
+
 function mergeWeatherFactors(skyFactor, windFactor) {
   if (!windFactor) return skyFactor;
 
@@ -1347,15 +1640,16 @@ function scoreWindExchange(
   needs,
   tempLowF,
   windSpeedMph,
+  thermalContext = {},
 ) {
   const multiplier = windExchangeMultiplier(windSpeedMph);
   const scale = (value) => Math.round(value * multiplier);
   const delta = outdoorTempF - indoorTempF;
-  const shiftF = estimateVentilationTempShiftF(indoorTempF, outdoorTempF);
-  const estIndoorF = indoorTempF + shiftF;
+  const netShiftF = netShiftFromThermalContext(thermalContext, indoorTempF, outdoorTempF);
+  const estIndoorF = indoorTempF + netShiftF;
   const unfavorable =
     (needs.includes('cool') &&
-      delta > 2 &&
+      delta >= 2 &&
       !(needs.includes('dehumidify') &&
         isMuchDrierOutdoor(indoorTempF, indoorRh, outdoorTempF, outdoorRh))) ||
     (needs.includes('warm') && delta < -5) ||
@@ -1476,6 +1770,7 @@ function scoreWeather(
   comfortMaxF = COMFORT_DEFAULT_MAX_F,
   windy = false,
   windSpeedMph = null,
+  thermalContext = {},
 ) {
   const { tempLowF } = normalizeComfortBounds(comfortMinF, comfortMaxF);
   const skyFactor = scoreSkyWeather(
@@ -1498,6 +1793,7 @@ function scoreWeather(
     needs,
     tempLowF,
     resolvedWindMph,
+    thermalContext,
   );
   return mergeWeatherFactors(skyFactor, windFactor);
 }
@@ -1586,8 +1882,22 @@ function evaluateConditions({
   localTimeMinutes = null,
   windy = false,
   windSpeedMph = null,
+  homeType,
+  storyCount,
+  windowOpening,
+  floorsOpen,
+  sunExposure,
+  tempMeasurementFloor,
 }) {
   const comfortBand = normalizeComfortBounds(comfortMinF, comfortMaxF);
+  const homeProfile = normalizeHomeProfile({
+    homeType,
+    storyCount,
+    windowOpening,
+    floorsOpen,
+    sunExposure,
+    tempMeasurementFloor,
+  });
   const solarIntensity = resolveSolarIntensity(
     latitudeDeg,
     localDate,
@@ -1600,18 +1910,49 @@ function evaluateConditions({
     comfortBand.tempLowF,
     comfortBand.tempHighF,
   );
-  const solarHeatingShiftF = estimateSolarHeatingShiftF({
+  const baseSolarHeatingShiftF = estimateSolarHeatingShiftF({
     solarIntensity,
     weather,
     indoorTempF,
     outdoorTempF,
   });
+  const sunMult = sunExposureMultiplier(homeProfile.sunExposure);
+  const scoringSolarHeatingShiftF = baseSolarHeatingShiftF * sunMult;
   const internalGainShiftF = estimateInternalGainShiftF(needs);
+  const idealVentilationShiftF = estimateVentilationTempShiftF(indoorTempF, outdoorTempF);
+  const ventilationShiftCapped = ventilationShiftIsCapped(indoorTempF, outdoorTempF);
+  const ventilationEffectiveness = resolveVentilationEffectiveness({
+    windowOpening: homeProfile.windowOpening,
+    floorsOpen: homeProfile.floorsOpen,
+    storyCount: homeProfile.storyCount,
+    homeType: homeProfile.homeType,
+    windy,
+    windSpeedMph,
+  });
+  const shiftAtFloor = computeShiftAtMeasurementFloor({
+    indoorTempF,
+    idealVentilationShiftF,
+    baseSolarHeatingShiftF,
+    internalGainShiftF,
+    ventilationEffectiveness,
+    sunExposure: homeProfile.sunExposure,
+    tempMeasurementFloor: homeProfile.tempMeasurementFloor,
+    storyCount: homeProfile.storyCount,
+  });
+  const idealExpectedShiftF =
+    idealVentilationShiftF + scoringSolarHeatingShiftF + internalGainShiftF;
   const thermalContext = {
     solarIntensity,
     weather,
-    solarHeatingShiftF,
+    baseSolarHeatingShiftF,
+    solarHeatingShiftF: scoringSolarHeatingShiftF,
     internalGainShiftF,
+    expectedShiftF: shiftAtFloor.expectedShiftF,
+    idealExpectedShiftF,
+    ventilationEffectiveness,
+    ventilationShiftCapped,
+    indoorTempF,
+    outdoorTempF,
   };
   const tempFactor = scoreTemperature(
     indoorTempF,
@@ -1651,6 +1992,7 @@ function evaluateConditions({
     comfortBand.tempHighF,
     windy,
     windSpeedMph,
+    thermalContext,
   );
 
   const totalScore =
@@ -1660,21 +2002,33 @@ function evaluateConditions({
     weatherFactor.score;
 
   const verdict = pickVerdict(totalScore);
-  const ventilationShiftF = estimateVentilationTempShiftF(indoorTempF, outdoorTempF);
-  const ventilationShiftCapped = ventilationShiftIsCapped(indoorTempF, outdoorTempF);
-  const expectedShiftF = ventilationShiftF + solarHeatingShiftF + internalGainShiftF;
+  const coolingOutlook = buildCoolingOutlook({
+    verdict,
+    needs,
+    idealExpectedShiftF,
+    expectedShiftF: shiftAtFloor.expectedShiftF,
+    ventilationEffectiveness,
+    homeProfile,
+    unit,
+  });
 
   return {
     needs,
     verdict,
     totalScore,
     comfortBand,
-    ventilationShiftF,
-    solarHeatingShiftF,
+    homeProfile,
+    ventilationEffectiveness,
+    idealVentilationShiftF,
+    idealExpectedShiftF,
+    idealEstimatedIndoorF: indoorTempF + idealExpectedShiftF,
+    ventilationShiftF: shiftAtFloor.ventilationShiftF,
+    solarHeatingShiftF: shiftAtFloor.solarHeatingShiftF,
     internalGainShiftF,
-    expectedShiftF,
+    expectedShiftF: shiftAtFloor.expectedShiftF,
     ventilationShiftCapped,
-    estimatedIndoorF: indoorTempF + expectedShiftF,
+    estimatedIndoorF: shiftAtFloor.estimatedIndoorF,
+    coolingOutlook,
     solarIntensity,
     tempFactor,
     humidityFactor,
@@ -1692,8 +2046,16 @@ export {
   VENTILATION_MAX_SHIFT_F,
   INTERNAL_GAIN_SHIFT_F,
   DEFAULT_LATITUDE_DEG,
+  DEFAULT_HOME_PROFILE,
   TWILIGHT_MINUTES,
   VERDICTS,
+  normalizeHomeProfile,
+  normalizeFloorsOpen,
+  resolveVentilationEffectiveness,
+  computeShiftAtMeasurementFloor,
+  describeVentilationSetup,
+  buildCoolingOutlook,
+  sunExposureMultiplier,
   isNullish,
   normalizeComfortBounds,
   comfortBoundsFromLegacyTarget,
@@ -1719,6 +2081,9 @@ export {
   ventilationShiftIsCapped,
   formatVentilationShift,
   formatExpectedShiftDisplay,
+  formatContextualShift,
+  netShiftFromThermalContext,
+  scaleHumidityScoreByVentilation,
   formatWindSpeedMetric,
   resolveWindSpeedMph,
   scoreTemperatureMaintainBand,

@@ -61,6 +61,13 @@ const elements = {
   comfortMax: document.getElementById('comfort-max'),
   comfortRangeDisplay: document.getElementById('comfort-range-display'),
   comfortRangeHint: document.getElementById('comfort-range-hint'),
+  homeType: document.getElementById('home-type'),
+  storyCount: document.getElementById('story-count'),
+  windowOpening: document.getElementById('window-opening'),
+  floorsOpen: document.getElementById('floors-open'),
+  sunExposure: document.getElementById('sun-exposure'),
+  coolingOutlook: document.getElementById('cooling-outlook'),
+  coolingOutlookText: document.getElementById('cooling-outlook-text'),
 };
 
 const NEED_LABELS = {
@@ -124,6 +131,7 @@ function clearResults() {
   elements.verdictBadge.textContent = '';
   elements.verdictHeadline.textContent = '';
   elements.verdictSummary.textContent = '';
+  if (elements.coolingOutlookText) elements.coolingOutlookText.textContent = '';
   elements.metrics.replaceChildren();
   elements.factors.replaceChildren();
   showValidation('');
@@ -203,6 +211,39 @@ function getWindInputs() {
   };
 }
 
+function getHomeProfileInputs() {
+  return {
+    homeType: elements.homeType?.value,
+    storyCount: elements.storyCount?.value,
+    windowOpening: elements.windowOpening?.value,
+    floorsOpen: elements.floorsOpen?.value,
+    sunExposure: elements.sunExposure?.value,
+  };
+}
+
+function updateFloorsOpenOptions() {
+  const select = elements.floorsOpen;
+  const storySelect = elements.storyCount;
+  if (!select || !storySelect) return;
+
+  const stories = storySelect.value;
+  for (const option of select.options) {
+    const singleStoryOnly = stories === '1' && option.value !== 'one-floor';
+    option.hidden = singleStoryOnly;
+    option.disabled = singleStoryOnly;
+  }
+
+  if (stories === '1' && select.value !== 'one-floor') {
+    select.value = 'one-floor';
+  }
+}
+
+function assignSelectValue(select, value) {
+  if (!select || typeof value !== 'string') return;
+  const option = [...select.options].find((opt) => opt.value === value && !opt.disabled);
+  if (option) select.value = value;
+}
+
 function evaluate() {
   const unit = getUnit();
   const indoorTempF = toFahrenheit(Number(elements.indoorTemp.value), unit);
@@ -247,6 +288,7 @@ function evaluate() {
   showValidation('');
 
   const { tempLowF: comfortMinF, tempHighF: comfortMaxF } = getComfortBoundsF();
+  const homeProfile = getHomeProfileInputs();
 
   const result = evaluateConditions({
     indoorTempF,
@@ -263,13 +305,16 @@ function evaluate() {
     longitudeDeg,
     localDate,
     localTimeMinutes,
+    ...homeProfile,
   });
 
   const {
     needs,
     verdict,
     expectedShiftF,
+    idealExpectedShiftF,
     ventilationShiftCapped,
+    coolingOutlook,
     tempFactor,
     humidityFactor,
     condensationFactor,
@@ -290,13 +335,24 @@ function evaluate() {
     weatherFactor,
   );
 
+  if (elements.coolingOutlookText) {
+    elements.coolingOutlookText.textContent = coolingOutlook;
+  }
+
   elements.metrics.replaceChildren(
     renderMetric('Temp difference', formatTempDifference(outdoorTempF, indoorTempF, unit)),
     renderMetric(
-      'Expected shift',
+      'Shift at your floor',
       formatExpectedShiftDisplay(expectedShiftF, unit, { capped: ventilationShiftCapped }),
     ),
-    renderMetric('Est. indoor temp', formatTemp(result.estimatedIndoorF, unit)),
+    renderMetric(
+      'Est. temp at your floor',
+      formatTemp(result.estimatedIndoorF, unit),
+    ),
+    renderMetric(
+      'Ideal shift (full mix)',
+      formatExpectedShiftDisplay(idealExpectedShiftF, unit, { capped: ventilationShiftCapped }),
+    ),
     renderMetric(
       'Dew point gap',
       formatDewPointDifference(humidityFactor.outdoorDp, humidityFactor.indoorDp, unit),
@@ -424,6 +480,7 @@ function getFormState() {
     ...(Number.isFinite(Number(elements.longitude?.value))
       ? { longitudeDeg: Number(elements.longitude.value) }
       : {}),
+    ...getHomeProfileInputs(),
   };
 }
 
@@ -476,6 +533,13 @@ function loadFormState() {
     }
 
     updateWindSpeedFieldVisibility();
+
+    assignSelectValue(elements.homeType, state.homeType);
+    assignSelectValue(elements.storyCount, state.storyCount);
+    updateFloorsOpenOptions();
+    assignSelectValue(elements.windowOpening, state.windowOpening);
+    assignSelectValue(elements.floorsOpen, state.floorsOpen);
+    assignSelectValue(elements.sunExposure, state.sunExposure);
 
     if (typeof state.latitudeDeg === 'number' && Number.isFinite(state.latitudeDeg)) {
       elements.latitude.value = String(state.latitudeDeg);
@@ -576,6 +640,11 @@ const inputElements = [
   elements.weather,
   elements.windy,
   elements.windSpeed,
+  elements.homeType,
+  elements.storyCount,
+  elements.windowOpening,
+  elements.floorsOpen,
+  elements.sunExposure,
   elements.localDate,
   elements.localTime,
   elements.latitude,
@@ -606,7 +675,15 @@ if (elements.windy) {
   });
 }
 
+if (elements.storyCount) {
+  elements.storyCount.addEventListener('change', () => {
+    updateFloorsOpenOptions();
+    onInputChange();
+  });
+}
+
 loadFormState();
+updateFloorsOpenOptions();
 updateWindSpeedFieldVisibility();
 initSunlightInputs();
 initComfortSliders();

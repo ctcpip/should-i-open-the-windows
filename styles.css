@@ -101,6 +101,12 @@ body {
   padding: 2rem 1.25rem 3rem;
 }
 
+@media (min-width: 1100px) {
+  .page {
+    max-width: min(1680px, calc(100vw - 2.5rem));
+  }
+}
+
 .header {
   text-align: center;
   margin-bottom: 2rem;
@@ -127,13 +133,18 @@ body {
 .layout {
   display: grid;
   gap: 1.25rem;
+  align-content: start;
+  align-items: start;
 }
 
-@media (min-width: 900px) {
+@media (min-width: 1100px) {
   .layout {
-    grid-template-columns: 1fr 1.1fr;
-    align-items: start;
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1fr) minmax(0, 1.1fr);
   }
+}
+
+.layout > .panel {
+  min-width: 0;
 }
 
 .panel {
@@ -142,6 +153,13 @@ body {
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   padding: 1.5rem;
+}
+
+.panel__intro {
+  margin: -0.65rem 0 1.15rem;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  line-height: 1.45;
 }
 
 .panel h2 {
@@ -233,6 +251,29 @@ body {
   padding-left: 1.55rem;
 }
 
+.field-grid {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.field-grid + .field-grid {
+  margin-top: 1rem;
+}
+
+@media (min-width: 560px) {
+  .field-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.field-grid__full {
+  grid-column: 1 / -1;
+}
+
+.ventilation-settings h3 {
+  margin: 0 0 0.85rem;
+}
+
 .sunlight-inputs__row {
   display: grid;
   gap: 0.75rem;
@@ -242,14 +283,8 @@ body {
   grid-template-columns: 1fr 1fr;
 }
 
-.sunlight-inputs__row--coords {
-  grid-template-columns: 1fr 1fr;
-  margin-top: 0.75rem;
-}
-
 @media (max-width: 520px) {
-  .sunlight-inputs__row--datetime,
-  .sunlight-inputs__row--coords {
+  .sunlight-inputs__row--datetime {
     grid-template-columns: 1fr;
   }
 }
@@ -448,16 +483,50 @@ select:focus {
   color: var(--text-muted);
 }
 
+.cooling-outlook {
+  margin: 0 0 1.25rem;
+  padding: 1rem 1.1rem;
+  border-radius: var(--radius-sm);
+  background: var(--metric-bg);
+  border: 1px solid var(--border);
+}
+
+.cooling-outlook__title {
+  margin: 0 0 0.45rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.cooling-outlook__text {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  color: var(--text);
+}
+
 .metrics {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.75rem;
   margin-bottom: 1.25rem;
 }
 
 @media (min-width: 560px) {
   .metrics {
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .panel--results .metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1400px) {
+  .panel--results .metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -466,6 +535,7 @@ select:focus {
   border-radius: var(--radius-sm);
   background: var(--metric-bg);
   border: 1px solid var(--border);
+  min-width: 0;
 }
 
 .metric__label {
@@ -478,6 +548,7 @@ select:focus {
 .metric__value {
   font-weight: 700;
   font-size: 1rem;
+  overflow-wrap: anywhere;
 }
 
 .factors {
