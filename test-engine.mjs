@@ -114,6 +114,7 @@ describe('temperature conversion and formatting', () => {
       }) >= 3,
     );
     assert.equal(estimateInternalGainShiftF(['maintain']), INTERNAL_GAIN_SHIFT_F);
+    assert.equal(estimateInternalGainShiftF(['maintain'], 0.2), INTERNAL_GAIN_SHIFT_F * 0.4);
     assert.equal(estimateInternalGainShiftF(['warm']), 0);
   });
 });
@@ -618,6 +619,90 @@ describe('home profile and ventilation effectiveness', () => {
     const fullSun = evaluateConditions({ ...base, sunExposure: 'full-sun' });
     assert.ok(fullSun.solarHeatingShiftF > shaded.solarHeatingShiftF);
     assert.ok(fullSun.tempFactor.score <= shaded.tempFactor.score);
+  });
+
+  it('downgrades cool scoring when limited ventilation prevents net cooling', () => {
+    const hotCracked = evaluateConditions({
+      indoorTempF: 82,
+      outdoorTempF: 68,
+      indoorRh: 55,
+      outdoorRh: 45,
+      weather: 'clear',
+      storyCount: '3',
+      windowOpening: 'cracked-few',
+      floorsOpen: 'one-floor',
+      localDate: '2026-06-22',
+      localTimeMinutes: 22 * 60,
+    });
+    const hotWide = evaluateConditions({
+      indoorTempF: 82,
+      outdoorTempF: 68,
+      indoorRh: 55,
+      outdoorRh: 45,
+      weather: 'clear',
+      windowOpening: 'wide-open',
+      floorsOpen: 'all-floors',
+      localDate: '2026-06-22',
+      localTimeMinutes: 22 * 60,
+    });
+
+    assert.ok(hotCracked.expectedShiftF <= 0.5);
+    assert.ok(hotWide.expectedShiftF < -2);
+    assert.ok(hotCracked.tempFactor.score < hotWide.tempFactor.score);
+    assert.ok(hotCracked.tempFactor.score <= 6);
+    assert.match(hotCracked.tempFactor.title, /limited|little|slight/i);
+    assert.ok(['marginal', 'not-worth-it', 'likely-worse', 'avoid'].includes(hotCracked.verdict.level));
+  });
+
+  it('treats breeze as unfavorable when cooling and outdoor air is 1°F warmer', () => {
+    const result = evaluateConditions({
+      indoorTempF: 78,
+      outdoorTempF: 79,
+      indoorRh: 50,
+      outdoorRh: 45,
+      weather: 'cloudy',
+      windy: true,
+      windSpeedMph: 12,
+      comfortMinF: 68,
+      comfortMaxF: 76,
+      localDate: '2026-06-22',
+      localTimeMinutes: 22 * 60,
+    });
+    assert.match(result.weatherFactor.title, /unwanted exchange/i);
+    assert.ok(result.weatherFactor.score <= 0);
+  });
+
+  it('builds humidity outlook for dehumidify with limited ventilation', () => {
+    const result = evaluateConditions({
+      indoorTempF: 74,
+      outdoorTempF: 66,
+      indoorRh: 52,
+      outdoorRh: 45,
+      weather: 'clear',
+      storyCount: '3',
+      windowOpening: 'cracked-few',
+      floorsOpen: 'two-floors',
+      localDate: '2026-06-22',
+      localTimeMinutes: 22 * 60,
+    });
+    assert.match(result.humidityOutlook, /slow|modest|drying/i);
+  });
+
+  it('aligns cool temp factor copy with expected shift sign', () => {
+    const result = evaluateConditions({
+      indoorTempF: 82,
+      outdoorTempF: 68,
+      indoorRh: 55,
+      outdoorRh: 45,
+      weather: 'clear',
+      windowOpening: 'wide-open',
+      floorsOpen: 'all-floors',
+      localDate: '2026-06-22',
+      localTimeMinutes: 22 * 60,
+    });
+    assert.ok(result.expectedShiftF < -1);
+    assert.ok(result.tempFactor.score > 10);
+    assert.match(result.tempFactor.body, /cooler/i);
   });
 });
 

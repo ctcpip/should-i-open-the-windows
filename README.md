@@ -10,35 +10,42 @@ Recommendations assume **heating and cooling are off**. Running HVAC while venti
 
 ## What you enter
 
-| Input                                | Purpose                                                   |
-| ------------------------------------ | --------------------------------------------------------- |
-| **Date, time, latitude, longitude**  | Estimate sunrise/sunset and solar heating on the building |
-| **Indoor / outdoor temp & humidity** | Core comparison (°F or °C)                                |
-| **Sky conditions**                   | Clear, partly cloudy, cloudy, or rainy                    |
-| **Wind**                             | Optional breezy/windy toggle and average wind speed (mph) |
-| **Comfort range**                    | Your acceptable indoor temperature band (60-80°F)         |
-| **Evaluate**                         | Runs the engine and shows a detailed breakdown            |
+### Home information
 
-Date and time reset to **now** on every page load. Other inputs are saved in `localStorage`.
+| Input                                | Purpose                                               |
+| ------------------------------------ | ----------------------------------------------------- |
+| **Latitude / longitude**             | Sunrise, sunset, and solar heating                    |
+| **Home type, stories, sun exposure** | How quickly the building heats and how well air mixes |
+| **Comfortable temperature range**    | Your acceptable indoor band                           |
+
+### Your conditions
+
+| Input                                | Purpose                                                    |
+| ------------------------------------ | ---------------------------------------------------------- |
+| **Date, time**                       | Solar intensity and time-of-day effects                    |
+| **Indoor / outdoor temp & humidity** | Core comparison (°F or °C)                                 |
+| **Sky conditions**                   | Clear, partly cloudy, cloudy, or rainy                     |
+| **Wind**                             | Optional breezy/windy toggle and average wind speed (mph)  |
+| **Ventilation**                      | Window opening level and how many floors have open windows |
+| **Evaluate**                         | Runs the engine and shows a detailed breakdown             |
 
 ## How recommendations work
 
 The engine scores four factors and combines them into a verdict:
 
-- **Temperature**
-  - Will ventilation help you cool down, warm up, or stay comfortable? Uses a _partial shift_ model: indoor temp moves partway toward outdoor (20-50% of the gap, capped at ~18°F for the whole home).
-- **Humidity**
-  - Dew point comparison. Indoor RH above **~50%** triggers a dryness goal; high humidity can feel stuffy even when temperature is fine.
-- **Condensation**
-  - Risk of fogging / water on window glass when warm moist indoor air meets cold outdoor glass.
-- **Weather**
-  - Solar heating (time-of-day + sky conditions), rain, and optional wind for air exchange.
+- **Temperature** — Uses a partial-shift model: indoor temp at your floor moves partway toward outdoor (20–50% of the gap, capped at ~18°F for the whole home), scaled by window opening, floors open, home type, and wind. Solar load and internal gains (people, appliances) are included in the net shift. Cool/warm scoring respects this net shift, not just the outdoor gap.
+- **Humidity** — Dew point comparison. Indoor RH above **~50%** triggers a dryness goal. Scores scale with ventilation effectiveness; results include a **humidity outlook** (slow / gradual / good drying potential).
+- **Condensation** — Risk of fogging / water on window glass when warm moist indoor air meets cold outdoor glass.
+- **Weather** — Solar heating (time-of-day + sky + sun on building), rain, and wind for air exchange.
 
-Verdict levels range from **Strong yes** to **Avoid opening**, with factor-by-factor explanations in the results panel.
+Results show **temperature** and **humidity outlooks** at your main floor, plus factor-by-factor explanations.
+
+Verdict levels range from **Strong yes** to **Avoid opening**.
 
 ## Caveats
 
-- Heuristics, not physics simulation -- useful for everyday decisions, not HVAC design.
+- Heuristics, not physics simulation — useful for everyday decisions, not HVAC design.
+- No time-to-equilibrium model; shifts describe direction and rough magnitude if windows stay open.
 - Does not account for air quality, pollen, allergies, noise, security, or rain blowing in.
 - Solar and sunrise/sunset use the [NOAA solar equations](https://gml.noaa.gov/grad/solcalc/calcdetails.html).
 - When in doubt, crack windows briefly instead of opening wide.

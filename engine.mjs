@@ -276,6 +276,75 @@ function buildCoolingOutlook({
   return `At the ${floorLabel} (${setup}), expect about ${adjustedText}.`;
 }
 
+function buildHumidityOutlook({
+  needs,
+  humidityFactor,
+  ventilationEffectiveness,
+  indoorRh,
+  indoorTempF,
+  outdoorTempF,
+  outdoorRh,
+  homeProfile,
+}) {
+  const indoorDp = dewPointFahrenheit(indoorTempF, indoorRh);
+  const outdoorDp = dewPointFahrenheit(outdoorTempF, outdoorRh);
+  const dpDelta =
+    indoorDp === null || outdoorDp === null ? 0 : outdoorDp - indoorDp;
+  const setup = describeVentilationSetup(homeProfile);
+  const effectiveness = Number.isFinite(ventilationEffectiveness)
+    ? ventilationEffectiveness
+    : 1;
+  const limited = effectiveness < 0.45;
+  const moderate = effectiveness >= 0.45 && effectiveness < 0.7;
+  const pace = limited ? 'slow' : moderate ? 'gradual' : 'noticeable';
+
+  if (needs.includes('dehumidify')) {
+    if (dpDelta <= -8) {
+      if (humidityFactor.impact === 'help' || humidityFactor.score > 0) {
+        if (limited) {
+          return `Outdoor air is much drier, but with ${setup} drying at your floor will be slow — don't expect RH to drop quickly.`;
+        }
+        if (moderate) {
+          return `Good drying potential outdoors — expect gradual humidity relief over an hour or two with ${setup}.`;
+        }
+        return `Good drying potential — outdoor air is much drier; humidity should move toward outdoor levels with ${setup}.`;
+      }
+    }
+    if (dpDelta <= -1 && humidityFactor.score > 0) {
+      if (limited) {
+        return `Outdoor air is somewhat drier, but ${setup} limits how fast humidity will change — modest relief at best.`;
+      }
+      return `Modest drying potential — expect ${pace} humidity improvement with ${setup}.`;
+    }
+    if (dpDelta >= 3 || humidityFactor.impact === 'hurt') {
+      return `Outdoor air is moister than inside — ventilation may increase humidity${limited ? ', even slowly' : ''}.`;
+    }
+    if (Math.abs(dpDelta) <= 2) {
+      return 'Indoor and outdoor moisture are similar — ventilation alone will not change humidity much.';
+    }
+    if (indoorRh > COMFORT.rhTargetMax && limited) {
+      return `At ${Math.round(indoorRh)}% RH with ${setup}, ventilation may freshen air but drying will be slow unless outdoor dew point is much lower.`;
+    }
+  }
+
+  if (needs.includes('humidify')) {
+    if (humidityFactor.impact === 'help') {
+      return limited
+        ? `Outdoor air is somewhat moister, but ${setup} makes adding humidity a slow process.`
+        : 'Outdoor air carries more moisture — expect gradual humidifying with open windows.';
+    }
+    if (humidityFactor.impact === 'hurt') {
+      return 'Outdoor air is drier than inside — ventilation will pull humidity down, not up.';
+    }
+  }
+
+  if (dpDelta <= -5 && effectiveness >= 0.5 && humidityFactor.score >= 0) {
+    return `Slightly drier outdoor air — may nudge humidity down ${pace}ly if windows stay open.`;
+  }
+
+  return '';
+}
+
 const DEFAULT_LATITUDE_DEG = 41.879539;
 const DEFAULT_LONGITUDE_DEG = -87.624039;
 const TWILIGHT_MINUTES = 30;
@@ -597,9 +666,10 @@ function estimateSolarHeatingShiftF({
   return 0;
 }
 
-function estimateInternalGainShiftF(needs) {
+function estimateInternalGainShiftF(needs, ventilationEffectiveness = 1) {
   if (needs.includes('warm') && !needs.includes('cool')) return 0;
-  return INTERNAL_GAIN_SHIFT_F;
+  const effectiveness = Number.isFinite(ventilationEffectiveness) ? ventilationEffectiveness : 1;
+  return INTERNAL_GAIN_SHIFT_F * (0.25 + 0.75 * effectiveness);
 }
 
 function describePassiveHeatingSources({
@@ -1020,6 +1090,196 @@ function scoreTemperatureForMoistureGoal(
   return null;
 }
 
+function scoreTemperatureCool(
+  indoorTempF,
+  outdoorTempF,
+  unit,
+  indoorRh,
+  outdoorRh,
+  needs,
+  thermalContext,
+) {
+  const delta = outdoorTempF - indoorTempF;
+  const netShift = netShiftFromThermalContext(thermalContext, indoorTempF, outdoorTempF);
+  const effectiveness = thermalContext.ventilationEffectiveness ?? 1;
+  const limitedVent = effectiveness < 0.45;
+  const shiftDesc = formatContextualShift(thermalContext, indoorTempF, outdoorTempF, unit);
+  const solarNote =
+    thermalContext.solarHeatingShiftF > 0.5
+      ? ', though sunlight warming the home can offset some of the gain'
+      : '';
+  const stickyAndDrier =
+    needs.includes('dehumidify') &&
+    isMuchDrierOutdoor(indoorTempF, indoorRh, outdoorTempF, outdoorRh);
+
+  if (netShift >= 0.5) {
+    if (delta > 0) {
+      if (stickyAndDrier && delta <= 6) {
+        return {
+          score: 2,
+          impact: 'mixed',
+          title: 'Warmer outside, but drier air may still help',
+          body: `Outdoor air is ${formatDelta(delta, unit)} warmer, yet much lower dew point can ease stuffiness -- expect ${shiftDesc}, so cooling will be limited.`,
+        };
+      }
+      if (stickyAndDrier && delta <= 10) {
+        return {
+          score: -8,
+          impact: 'mixed',
+          title: 'Warmer outside, but notably drier',
+          body: `Outdoor air is ${formatDelta(delta, unit)} warmer -- expect ${shiftDesc}; the lower dew point may still ease stuffiness.`,
+        };
+      }
+      return {
+        score: delta >= 6 ? -22 : -18,
+        impact: 'hurt',
+        title: delta >= 6 ? 'Outdoor air is warmer -- cooling will suffer' : 'Net warming expected',
+        body: `Expect ${shiftDesc} indoors -- outdoor air works against cooling your home.`,
+      };
+    }
+    return {
+      score: -14,
+      impact: 'hurt',
+      title: 'Limited cooling at your floor',
+      body: `Outdoor air is ${formatDelta(-delta, unit)} cooler, but with your window setup expect ${shiftDesc}${limitedVent ? ' — passive heat and limited mixing offset the outdoor air' : ' — passive heat may offset the gain'}.`,
+    };
+  }
+
+  if (netShift > -0.5) {
+    if (stickyAndDrier && delta > -3) {
+      return {
+        score: 8,
+        impact: 'mixed',
+        title: 'Slightly warmer outside, but much drier',
+        body: 'Outdoor air is a touch warmer yet the dew point is notably lower -- expect humidity relief with little or no cooling.',
+      };
+    }
+    if (Math.abs(delta) <= 1) {
+      return {
+        score: -5,
+        impact: 'neutral',
+        title: 'Little temperature benefit',
+        body: `Indoor and outdoor temperatures are nearly the same -- expect ${shiftDesc} if you ventilate.`,
+      };
+    }
+    if (delta <= -3) {
+      return {
+        score: limitedVent ? 2 : 6,
+        impact: 'mixed',
+        title: 'Outdoor air is cooler -- limited net cooling',
+        body: `Outdoor air is ${formatDelta(-delta, unit)} cooler, but expect ${shiftDesc} at your floor${limitedVent ? ' with limited window opening' : ''}.`,
+      };
+    }
+    if (stickyAndDrier && delta <= 6) {
+      return {
+        score: 2,
+        impact: 'mixed',
+        title: 'Warmer outside, but drier air may still help',
+        body: `Outdoor air is ${formatDelta(delta, unit)} warmer, yet much lower dew point can ease stuffiness -- expect ${shiftDesc}.`,
+      };
+    }
+    if (stickyAndDrier && delta <= 10) {
+      return {
+        score: -8,
+        impact: 'mixed',
+        title: 'Warmer outside, but notably drier',
+        body: `Outdoor air is ${formatDelta(delta, unit)} warmer -- expect ${shiftDesc}; the lower dew point may still ease stuffiness.`,
+      };
+    }
+    return {
+      score: -22,
+      impact: 'hurt',
+      title: 'Outdoor air is warmer -- cooling will suffer',
+      body: `You would be letting in air about ${formatDelta(delta, unit)} warmer than inside -- expect ${shiftDesc}.`,
+    };
+  }
+
+  const absNet = Math.abs(netShift);
+  if (delta <= -8 || absNet >= 3) {
+    return {
+      score: Math.min(30, Math.round(12 + absNet * 4)),
+      impact: 'help',
+      title: absNet >= 3 ? 'Should cool noticeably at your floor' : 'Outdoor air is much cooler',
+      body: `Outdoor air is ${formatDelta(-delta, unit)} cooler -- expect ${shiftDesc} indoors${solarNote}.`,
+    };
+  }
+  if (delta <= -3 || absNet >= 1.5) {
+    return {
+      score: Math.min(14, Math.round(5 + absNet * 3)),
+      impact: absNet >= 2 ? 'help' : 'mixed',
+      title: 'Modest cooling from outdoor air',
+      body: `Outdoor air is ${formatDelta(-delta, unit)} cooler. Expect ${shiftDesc} indoors -- gradual, and less than the full gap to outside.`,
+    };
+  }
+  return {
+    score: 8,
+    impact: 'mixed',
+    title: 'Slight cooling expected',
+    body: `Expect ${shiftDesc} indoors.`,
+  };
+}
+
+function scoreTemperatureWarm(indoorTempF, outdoorTempF, unit, thermalContext) {
+  const delta = outdoorTempF - indoorTempF;
+  const netShift = netShiftFromThermalContext(thermalContext, indoorTempF, outdoorTempF);
+  const shiftDesc = formatContextualShift(thermalContext, indoorTempF, outdoorTempF, unit);
+
+  if (netShift <= -5 || delta <= -15) {
+    return {
+      score: -45,
+      impact: 'hurt',
+      title: 'Very cold outdoor air',
+      body: `Letting in frigid air will overwhelm most heating -- expect ${shiftDesc}.`,
+    };
+  }
+  if (netShift <= -2 || delta <= -10) {
+    return {
+      score: -28,
+      impact: 'hurt',
+      title: 'Cold outdoor air will steal heat',
+      body: `Outdoor air is about ${formatDelta(-delta, unit)} colder -- expect ${shiftDesc} indoors, not a full drop to outdoor temp.`,
+    };
+  }
+  if (netShift <= -0.5 && delta < -3) {
+    return {
+      score: -20,
+      impact: 'hurt',
+      title: 'Cold outdoor air will steal heat',
+      body: `Outdoor air is cooler than inside -- expect ${shiftDesc}, working against warming.`,
+    };
+  }
+  if (delta >= 8 && netShift >= 0.3) {
+    return {
+      score: 12,
+      impact: 'mixed',
+      title: 'Outdoor air could warm the home slowly',
+      body: `Outdoor air is ${formatDelta(delta, unit)} warmer -- expect ${shiftDesc}; window ventilation alone is a weak substitute for running heat.`,
+    };
+  }
+  if (delta >= 3 && netShift >= 0.2) {
+    return {
+      score: 4,
+      impact: 'mixed',
+      title: 'Limited warming from ventilation',
+      body: `Outdoor air is a bit warmer -- expect ${shiftDesc}; windows alone will not replace your heating system meaningfully.`,
+    };
+  }
+  if (delta >= -3) {
+    return {
+      score: -8,
+      impact: 'neutral',
+      title: 'Minimal warming help',
+      body: 'Outdoor air is not much warmer than inside, so windows alone will not replace your heating.',
+    };
+  }
+  return {
+    score: -28,
+    impact: 'hurt',
+    title: 'Cold outdoor air will steal heat',
+    body: `Outdoor air is about ${formatDelta(-delta, unit)} colder -- expect ${shiftDesc} indoors.`,
+  };
+}
+
 function scoreTemperature(
   indoorTempF,
   outdoorTempF,
@@ -1032,117 +1292,22 @@ function scoreTemperature(
   thermalContext = {},
 ) {
   const { tempLowF, tempHighF } = normalizeComfortBounds(comfortMinF, comfortMaxF);
-  const delta = outdoorTempF - indoorTempF;
   const inComfortBand = indoorTempF >= tempLowF && indoorTempF <= tempHighF;
 
   if (needs.includes('cool')) {
-    const stickyAndDrier =
-      needs.includes('dehumidify') &&
-      isMuchDrierOutdoor(indoorTempF, indoorRh, outdoorTempF, outdoorRh);
-
-    if (delta <= -8) {
-      return {
-        score: 30,
-        impact: 'help',
-        title: 'Outdoor air is much cooler',
-        body: `Outdoor air is ${formatDelta(-delta, unit)} cooler -- expect ${formatContextualShift(thermalContext, indoorTempF, outdoorTempF, unit)} indoors, though sunlight warming the home can offset some of the gain.`,
-      };
-    }
-    if (delta <= -3) {
-      return {
-        score: 14,
-        impact: 'mixed',
-        title: 'Modest cooling from outdoor air',
-        body: `Outdoor air is ${formatDelta(-delta, unit)} cooler. Expect ${formatContextualShift(thermalContext, indoorTempF, outdoorTempF, unit)} indoors -- gradual, and less than the full gap to outside.`,
-      };
-    }
-    if (delta <= 1) {
-      if (stickyAndDrier && delta > -3) {
-        return {
-          score: 8,
-          impact: 'mixed',
-          title: 'Slightly warmer outside, but much drier',
-          body: 'Outdoor air is a touch warmer yet the dew point is notably lower -- expect humidity relief with little or no cooling.',
-        };
-      }
-      return {
-        score: -5,
-        impact: 'neutral',
-        title: 'Little temperature benefit',
-        body: 'Indoor and outdoor temperatures are nearly the same, so opening windows will not move the needle much on heat.',
-      };
-    }
-    if (delta <= 6) {
-      if (stickyAndDrier) {
-        return {
-          score: 2,
-          impact: 'mixed',
-          title: 'Warmer outside, but drier air may still help',
-          body: `Outdoor air is ${formatDelta(delta, unit)} warmer, yet much lower dew point can ease stuffiness -- cooling will be limited.`,
-        };
-      }
-      return {
-        score: -22,
-        impact: 'hurt',
-        title: 'Outdoor air is warmer -- cooling will suffer',
-        body: `You would be letting in air about ${formatDelta(delta, unit)} warmer than inside, working against your goal.`,
-      };
-    }
-    if (stickyAndDrier && delta <= 10) {
-      return {
-        score: -8,
-        impact: 'mixed',
-        title: 'Warmer outside, but notably drier',
-        body: `Outdoor air is ${formatDelta(delta, unit)} warmer -- cooling suffers, but the lower dew point may still ease stuffiness.`,
-      };
-    }
-    return {
-      score: -40,
-      impact: 'hurt',
-      title: 'Outdoor air is much warmer',
-      body: `Opening windows would admit air roughly ${formatDelta(delta, unit)} hotter -- likely making the home warmer and stickier.`,
-    };
+    return scoreTemperatureCool(
+      indoorTempF,
+      outdoorTempF,
+      unit,
+      indoorRh,
+      outdoorRh,
+      needs,
+      thermalContext,
+    );
   }
 
   if (needs.includes('warm')) {
-    if (delta >= 8) {
-      return {
-        score: 12,
-        impact: 'mixed',
-        title: 'Outdoor air could warm the home slowly',
-        body: `Outdoor air is ${formatDelta(delta, unit)} warmer, but window ventilation alone is a weak substitute for running heat -- any gain will be uneven and slow.`,
-      };
-    }
-    if (delta >= 3) {
-      return {
-        score: 4,
-        impact: 'mixed',
-        title: 'Limited warming from ventilation',
-        body: 'Outdoor air is a bit warmer, but windows alone will not replace your heating system meaningfully.',
-      };
-    }
-    if (delta >= -3) {
-      return {
-        score: -8,
-        impact: 'neutral',
-        title: 'Minimal warming help',
-        body: 'Outdoor air is not much warmer than inside, so windows alone will not replace your heating.',
-      };
-    }
-    if (delta >= -10) {
-      return {
-        score: -28,
-        impact: 'hurt',
-        title: 'Cold outdoor air will steal heat',
-        body: `Outdoor air is about ${formatDelta(-delta, unit)} colder -- expect ${formatContextualShift(thermalContext, indoorTempF, outdoorTempF, unit)} indoors, not a full drop to outdoor temp.`,
-      };
-    }
-    return {
-      score: -45,
-      impact: 'hurt',
-      title: 'Very cold outdoor air',
-      body: 'Letting in frigid air will overwhelm most heating and make rooms uncomfortable quickly.',
-    };
+    return scoreTemperatureWarm(indoorTempF, outdoorTempF, unit, thermalContext);
   }
 
   const moistureGoal = scoreTemperatureForMoistureGoal(
@@ -1650,7 +1815,7 @@ function scoreWindExchange(
   const estIndoorF = indoorTempF + netShiftF;
   const unfavorable =
     (needs.includes('cool') &&
-      delta >= 2 &&
+      delta >= 1 &&
       !(needs.includes('dehumidify') &&
         isMuchDrierOutdoor(indoorTempF, indoorRh, outdoorTempF, outdoorRh))) ||
     (needs.includes('warm') && delta < -5) ||
@@ -1911,15 +2076,7 @@ function evaluateConditions({
     comfortBand.tempLowF,
     comfortBand.tempHighF,
   );
-  const baseSolarHeatingShiftF = estimateSolarHeatingShiftF({
-    solarIntensity,
-    weather,
-    indoorTempF,
-    outdoorTempF,
-  });
   const sunMult = sunExposureMultiplier(homeProfile.sunExposure);
-  const scoringSolarHeatingShiftF = baseSolarHeatingShiftF * sunMult;
-  const internalGainShiftF = estimateInternalGainShiftF(needs);
   const idealVentilationShiftF = estimateVentilationTempShiftF(indoorTempF, outdoorTempF);
   const ventilationShiftCapped = ventilationShiftIsCapped(indoorTempF, outdoorTempF);
   const ventilationEffectiveness = resolveVentilationEffectiveness({
@@ -1930,6 +2087,14 @@ function evaluateConditions({
     windy,
     windSpeedMph,
   });
+  const internalGainShiftF = estimateInternalGainShiftF(needs, ventilationEffectiveness);
+  const baseSolarHeatingShiftF = estimateSolarHeatingShiftF({
+    solarIntensity,
+    weather,
+    indoorTempF,
+    outdoorTempF,
+  });
+  const scoringSolarHeatingShiftF = baseSolarHeatingShiftF * sunMult;
   const shiftAtFloor = computeShiftAtMeasurementFloor({
     indoorTempF,
     idealVentilationShiftF,
@@ -2012,6 +2177,16 @@ function evaluateConditions({
     homeProfile,
     unit,
   });
+  const humidityOutlook = buildHumidityOutlook({
+    needs,
+    humidityFactor,
+    ventilationEffectiveness,
+    indoorRh,
+    indoorTempF,
+    outdoorTempF,
+    outdoorRh,
+    homeProfile,
+  });
 
   return {
     needs,
@@ -2030,6 +2205,7 @@ function evaluateConditions({
     ventilationShiftCapped,
     estimatedIndoorF: shiftAtFloor.estimatedIndoorF,
     coolingOutlook,
+    humidityOutlook,
     solarIntensity,
     tempFactor,
     humidityFactor,
@@ -2057,6 +2233,9 @@ export {
   computeShiftAtMeasurementFloor,
   describeVentilationSetup,
   buildCoolingOutlook,
+  buildHumidityOutlook,
+  scoreTemperatureCool,
+  scoreTemperatureWarm,
   sunExposureMultiplier,
   isNullish,
   normalizeComfortBounds,

@@ -483,7 +483,8 @@ select:focus {
   color: var(--text-muted);
 }
 
-.cooling-outlook {
+.cooling-outlook,
+.outlook {
   margin: 0 0 1.25rem;
   padding: 1rem 1.1rem;
   border-radius: var(--radius-sm);
@@ -491,7 +492,15 @@ select:focus {
   border: 1px solid var(--border);
 }
 
-.cooling-outlook__title {
+.cooling-outlook__title,
+.cooling-outlook__text,
+.outlook__title,
+.outlook__text {
+  margin: 0;
+}
+
+.cooling-outlook__title,
+.outlook__title {
   margin: 0 0 0.45rem;
   font-size: 0.85rem;
   font-weight: 700;
@@ -500,8 +509,8 @@ select:focus {
   color: var(--text-muted);
 }
 
-.cooling-outlook__text {
-  margin: 0;
+.cooling-outlook__text,
+.outlook__text {
   font-size: 0.95rem;
   line-height: 1.45;
   color: var(--text);

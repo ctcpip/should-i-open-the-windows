@@ -68,6 +68,8 @@ const elements = {
   sunExposure: document.getElementById('sun-exposure'),
   coolingOutlook: document.getElementById('cooling-outlook'),
   coolingOutlookText: document.getElementById('cooling-outlook-text'),
+  humidityOutlook: document.getElementById('humidity-outlook'),
+  humidityOutlookText: document.getElementById('humidity-outlook-text'),
 };
 
 const NEED_LABELS = {
@@ -132,6 +134,8 @@ function clearResults() {
   elements.verdictHeadline.textContent = '';
   elements.verdictSummary.textContent = '';
   if (elements.coolingOutlookText) elements.coolingOutlookText.textContent = '';
+  if (elements.humidityOutlook) elements.humidityOutlook.hidden = true;
+  if (elements.humidityOutlookText) elements.humidityOutlookText.textContent = '';
   elements.metrics.replaceChildren();
   elements.factors.replaceChildren();
   showValidation('');
@@ -315,6 +319,7 @@ function evaluate() {
     idealExpectedShiftF,
     ventilationShiftCapped,
     coolingOutlook,
+    humidityOutlook,
     tempFactor,
     humidityFactor,
     condensationFactor,
@@ -337,6 +342,17 @@ function evaluate() {
 
   if (elements.coolingOutlookText) {
     elements.coolingOutlookText.textContent = coolingOutlook;
+  }
+
+  if (elements.humidityOutlook && elements.humidityOutlookText) {
+    if (humidityOutlook) {
+      elements.humidityOutlook.hidden = false;
+      elements.humidityOutlookText.textContent = humidityOutlook;
+    }
+    else {
+      elements.humidityOutlook.hidden = true;
+      elements.humidityOutlookText.textContent = '';
+    }
   }
 
   elements.metrics.replaceChildren(
