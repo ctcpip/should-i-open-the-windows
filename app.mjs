@@ -268,7 +268,6 @@ function evaluate() {
   const {
     needs,
     verdict,
-    comfortBand,
     expectedShiftF,
     ventilationShiftCapped,
     tempFactor,
@@ -303,10 +302,6 @@ function evaluate() {
       formatDewPointDifference(humidityFactor.outdoorDp, humidityFactor.indoorDp, unit),
     ),
     renderMetric('Indoor dew point', formatTemp(humidityFactor.indoorDp, unit)),
-    renderMetric(
-      'Comfort range',
-      formatComfortRange(comfortBand.tempLowF, comfortBand.tempHighF, unit),
-    ),
     renderMetric(
       'Solar heating',
       formatSolarHeatingMetric(

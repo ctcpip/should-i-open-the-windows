@@ -182,13 +182,10 @@ function getSolarIntensityFactor(
   );
 
   if (timeMinutes <= sunriseMinutes - TWILIGHT_MINUTES) return 0;
-  if (timeMinutes >= sunsetMinutes + TWILIGHT_MINUTES) return 0;
+  if (timeMinutes >= sunsetMinutes) return 0;
 
   if (timeMinutes < sunriseMinutes) {
     return ((timeMinutes - (sunriseMinutes - TWILIGHT_MINUTES)) / TWILIGHT_MINUTES) * 0.25;
-  }
-  if (timeMinutes > sunsetMinutes) {
-    return ((sunsetMinutes + TWILIGHT_MINUTES - timeMinutes) / TWILIGHT_MINUTES) * 0.25;
   }
 
   const noon = (sunriseMinutes + sunsetMinutes) / 2;
@@ -1304,6 +1301,13 @@ function resolveWindSpeedMph(windy, windSpeedMph) {
   return DEFAULT_WIND_SPEED_MPH;
 }
 
+function formatWindSpeedMetric(windy, windSpeedMph) {
+  if (!windy) return null;
+  const raw = Number(windSpeedMph);
+  if (Number.isFinite(raw) && raw >= 0) return `${Math.round(raw)} mph`;
+  return `~${DEFAULT_WIND_SPEED_MPH} mph (typical breeze assumed)`;
+}
+
 function windExchangeMultiplier(windSpeedMph) {
   if (windSpeedMph <= 5) return 0.45;
   if (windSpeedMph <= 12) return 0.75;
@@ -1715,6 +1719,8 @@ export {
   ventilationShiftIsCapped,
   formatVentilationShift,
   formatExpectedShiftDisplay,
+  formatWindSpeedMetric,
+  resolveWindSpeedMph,
   scoreTemperatureMaintainBand,
   toFahrenheit,
   fromFahrenheit,

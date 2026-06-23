@@ -226,7 +226,7 @@ body {
   accent-color: var(--accent);
 }
 
-.wind-speed-field {
+.wind-speed-field:not([hidden]) {
   display: grid;
   gap: 0.45rem;
   margin-top: 0.65rem;

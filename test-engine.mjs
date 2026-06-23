@@ -222,6 +222,16 @@ describe('solar helpers', () => {
   it('returns zero solar intensity at night', () => {
     assert.equal(getSolarIntensityFactor(40, summerDate, 2 * 60, testLonDeg, testTzHours), 0);
     assert.equal(getSolarIntensityFactor(40, summerDate, 23 * 60, testLonDeg, testTzHours), 0);
+    const { sunsetMinutes } = getSunriseSunsetLocalMinutes(
+      40,
+      summerDate,
+      testLonDeg,
+      testTzHours,
+    );
+    assert.equal(
+      getSolarIntensityFactor(40, summerDate, sunsetMinutes + 15, testLonDeg, testTzHours),
+      0,
+    );
   });
 
   it('returns higher intensity near solar noon', () => {
