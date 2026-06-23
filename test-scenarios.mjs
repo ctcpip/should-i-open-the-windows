@@ -3,30 +3,7 @@
  * Run: node test-scenarios.mjs
  */
 
-import vm from 'node:vm';
-import fs from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const appSource = fs.readFileSync(join(__dirname, 'app.mjs'), 'utf8');
-
-const engineSource = appSource
-  .replace(/^const elements =[\s\S]*?^function describeNeeds/m, 'function describeNeeds')
-  .replace(/^elements\.unitInputs\.forEach[\s\S]*/m, '');
-
-const sandbox = {
-  document: {
-    querySelector: () => ({ value: 'f' }),
-    querySelectorAll: () => [],
-    getElementById: () => null,
-  },
-};
-
-vm.createContext(sandbox);
-vm.runInContext(engineSource, sandbox);
-
-const { evaluateConditions } = sandbox;
+import { evaluateConditions } from './engine.mjs';
 
 const scenarios = [
   {
