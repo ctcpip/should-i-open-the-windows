@@ -27,7 +27,7 @@
           <h2 id="inputs-heading">Your conditions</h2>
 
           <div class="input-group input-group--full sunlight-inputs">
-            <div class="sunlight-inputs__row">
+            <div class="sunlight-inputs__row sunlight-inputs__row--datetime">
               <div>
                 <label for="local-date">Date</label>
                 <input type="date" id="local-date" />
@@ -36,6 +36,8 @@
                 <label for="local-time">Local time</label>
                 <input type="time" id="local-time" />
               </div>
+            </div>
+            <div class="sunlight-inputs__row sunlight-inputs__row--coords">
               <div>
                 <label for="latitude">Latitude</label>
                 <input
@@ -47,9 +49,19 @@
                   value="40"
                 />
               </div>
+              <div>
+                <label for="longitude">Longitude</label>
+                <input
+                  type="number"
+                  id="longitude"
+                  min="-180"
+                  max="180"
+                  step="0.1"
+                />
+              </div>
             </div>
             <p class="hint" id="sunlight-hint">
-              Sunrise and sunset depend on date and latitude.
+              Sunrise and sunset depend on date, latitude, and longitude.
             </p>
           </div>
 
@@ -124,17 +136,41 @@
           </div>
 
           <div class="input-group input-group--full">
-            <label for="weather">Weather</label>
+            <label for="weather">Sky conditions</label>
             <select id="weather">
               <option value="clear">Clear / sunny</option>
               <option value="partly-cloudy">Partly cloudy</option>
               <option value="cloudy">Cloudy / overcast</option>
               <option value="rainy">Rainy / stormy</option>
-              <option value="windy">Windy / breezy</option>
             </select>
             <p class="hint">
-              Weather affects solar heating on the building, rain-driven humidity, and how quickly
-              air will exchange.
+              Sky conditions affect solar heating on the building and rain-driven humidity.
+            </p>
+          </div>
+
+          <div class="input-group input-group--full wind-inputs">
+            <label class="checkbox-row" for="windy">
+              <input type="checkbox" id="windy" />
+              <span>Windy / breezy outside</span>
+            </label>
+            <div class="wind-speed-field" id="wind-speed-field" hidden>
+              <label for="wind-speed">Average wind speed (mph, optional)</label>
+              <input
+                type="number"
+                id="wind-speed"
+                inputmode="decimal"
+                min="0"
+                max="75"
+                step="1"
+                placeholder="e.g. 12"
+              />
+              <p class="hint">
+                Estimates how quickly air exchanges. Leave blank to assume a typical breeze (~12 mph).
+              </p>
+            </div>
+            <p class="hint">
+              Wind is separate from sky conditions -- a clear day can still be breezy, and rain can
+              arrive with gusts.
             </p>
           </div>
 
@@ -167,7 +203,7 @@
             </div>
             <p class="hint" id="comfort-range-hint">
               Recommendations assume you want to stay within this range and keep indoor humidity
-              at or below about 50% when possible — above that often feels stuffy even at a
+              at or below about 50% when possible -- above that often feels stuffy even at a
               comfortable temperature.
             </p>
           </div>
@@ -176,7 +212,7 @@
             Evaluate conditions
           </button>
           <p class="hint ventilation-note">
-            Turn off heating or cooling before opening windows — running HVAC while ventilating
+            Turn off heating or cooling before opening windows -- running HVAC while ventilating
             wastes energy and fights the outdoor air.
           </p>
           <p id="validation-error" class="validation-error" role="alert" hidden></p>
@@ -209,7 +245,7 @@
 
       <footer class="footer">
         <p>
-          Uses dew point and comfort heuristics — not a substitute for local air-quality alerts,
+          Uses dew point and comfort heuristics -- not a substitute for local air-quality alerts,
           allergies, or security. When in doubt, crack windows briefly instead of wide open.
           Always turn off heating or cooling before ventilating.
         </p>

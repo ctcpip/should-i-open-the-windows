@@ -6,14 +6,18 @@ import {
   COMFORT_DEFAULT_MAX_F,
   COMFORT_DEFAULT_MIN_F,
   COMFORT_MIN_SPAN_F,
+  INTERNAL_GAIN_SHIFT_F,
   VENTILATION_MAX_SHIFT_F,
   VERDICTS,
   absoluteHumidityGpm3,
   buildHeadline,
   buildSummary,
   comfortBoundsFromLegacyTarget,
+  describeSunlightWindow,
   dewPointFahrenheit,
   estimateVentilationTempShiftF,
+  estimateInternalGainShiftF,
+  estimateSolarHeatingShiftF,
   evaluateConditions,
   formatComfortRange,
   formatDelta,
@@ -37,6 +41,7 @@ import {
   scoreTemperature,
   scoreWeather,
   toFahrenheit,
+  ventilationShiftIsCapped,
   weatherSolarMultiplier,
 } from './engine.mjs';
 
@@ -88,10 +93,25 @@ describe('temperature conversion and formatting', () => {
   });
 
   it('formats dew point and ventilation shift strings', () => {
-    assert.equal(formatDewPointDifference(50, 58, 'f'), '8°F drier outside');
-    assert.equal(formatVentilationShift(0, 'f'), 'little change');
+    assert.equal(formatDewPointDifference(50, 58, 'f'), 'Outdoor dew point 8°F lower');
+    assert.equal(formatDewPointDifference(60, 50, 'f'), 'Outdoor dew point 10°F higher');
+    assert.equal(formatVentilationShift(0, 'f'), 'little air-temp change');
     assert.equal(formatVentilationShift(-3, 'f'), 'roughly 3°F cooler');
     assert.equal(formatVentilationShift(2.5, 'c'), 'roughly 1.4°C warmer');
+    assert.match(
+      formatVentilationShift(-18, 'f', { capped: true }),
+      /won't reach outdoor temp/,
+    );
+    assert.ok(
+      estimateSolarHeatingShiftF({
+        solarIntensity: 1,
+        weather: 'clear',
+        indoorTempF: 75,
+        outdoorTempF: 75,
+      }) >= 3,
+    );
+    assert.equal(estimateInternalGainShiftF(['maintain']), INTERNAL_GAIN_SHIFT_F);
+    assert.equal(estimateInternalGainShiftF(['warm']), 0);
   });
 });
 
@@ -145,10 +165,15 @@ describe('estimateVentilationTempShiftF', () => {
     assert.ok(Math.abs(shift) < 10);
   });
 
-  it('caps shift at VENTILATION_MAX_SHIFT_F', () => {
-    const shift = estimateVentilationTempShiftF(80, 40);
-    assert.equal(Math.abs(shift), VENTILATION_MAX_SHIFT_F);
-    assert.equal(shift, -VENTILATION_MAX_SHIFT_F);
+  it('does not cap modest indoor/outdoor gaps', () => {
+    assert.equal(estimateVentilationTempShiftF(78, 68), -4);
+    assert.equal(estimateVentilationTempShiftF(72, 45), -13.5);
+  });
+
+  it('caps extreme gaps at VENTILATION_MAX_SHIFT_F', () => {
+    assert.equal(estimateVentilationTempShiftF(72, 10), -VENTILATION_MAX_SHIFT_F);
+    assert.equal(ventilationShiftIsCapped(72, 10), true);
+    assert.equal(ventilationShiftIsCapped(72, 45), false);
   });
 });
 
@@ -166,6 +191,8 @@ describe('pickVerdict', () => {
 
 describe('solar helpers', () => {
   const summerDate = normalizeLocalDate('2025-06-21');
+  const testTzHours = -4;
+  const testLonDeg = -75;
 
   it('parses local dates', () => {
     assert.ok(normalizeLocalDate('2025-06-21') instanceof Date);
@@ -173,22 +200,43 @@ describe('solar helpers', () => {
   });
 
   it('computes sunrise and sunset ordering', () => {
-    const { sunriseMinutes, sunsetMinutes } = getSunriseSunsetLocalMinutes(40, summerDate);
+    const { sunriseMinutes, sunsetMinutes } = getSunriseSunsetLocalMinutes(
+      40,
+      summerDate,
+      testLonDeg,
+      testTzHours,
+    );
     assert.ok(sunriseMinutes < sunsetMinutes);
     assert.ok(sunriseMinutes > 3 * 60);
+    assert.ok(sunsetMinutes > 19 * 60);
+  });
+
+  it('estimates realistic sunset for eastern US summer (not noon-centered)', () => {
+    const date = normalizeLocalDate('2025-06-22');
+    const { sunsetMinutes } = getSunriseSunsetLocalMinutes(41.88, date, -75, -4);
+    assert.ok(sunsetMinutes > 20 * 60 + 20);
     assert.ok(sunsetMinutes < 21 * 60);
+    assert.ok(!describeSunlightWindow(41.88, '2025-06-22', -75).includes('19:32'));
   });
 
   it('returns zero solar intensity at night', () => {
-    assert.equal(getSolarIntensityFactor(40, summerDate, 2 * 60), 0);
-    assert.equal(getSolarIntensityFactor(40, summerDate, 23 * 60), 0);
+    assert.equal(getSolarIntensityFactor(40, summerDate, 2 * 60, testLonDeg, testTzHours), 0);
+    assert.equal(getSolarIntensityFactor(40, summerDate, 23 * 60, testLonDeg, testTzHours), 0);
   });
 
   it('returns higher intensity near solar noon', () => {
-    const { sunriseMinutes, sunsetMinutes } = getSunriseSunsetLocalMinutes(40, summerDate);
+    const { sunriseMinutes, sunsetMinutes } = getSunriseSunsetLocalMinutes(
+      40,
+      summerDate,
+      testLonDeg,
+      testTzHours,
+    );
     const noon = (sunriseMinutes + sunsetMinutes) / 2;
     const morning = sunriseMinutes + 60;
-    assert.ok(getSolarIntensityFactor(40, summerDate, noon) > getSolarIntensityFactor(40, summerDate, morning));
+    assert.ok(
+      getSolarIntensityFactor(40, summerDate, noon, testLonDeg, testTzHours) >
+        getSolarIntensityFactor(40, summerDate, morning, testLonDeg, testTzHours),
+    );
   });
 
   it('defaults solar intensity when inputs are missing', () => {
@@ -203,9 +251,9 @@ describe('solar helpers', () => {
     assert.equal(weatherSolarMultiplier('rainy'), 0.05);
   });
 
-  it('formats solar heating metric for night and windy weather', () => {
+  it('formats solar heating metric for night and clear skies', () => {
     assert.equal(formatSolarHeatingMetric(0, 0, 'clear'), 'None (night)');
-    assert.match(formatSolarHeatingMetric(0.8, 0.8, 'windy'), /time only/);
+    assert.match(formatSolarHeatingMetric(0.8, 0.8, 'clear'), /clear skies/);
   });
 });
 
@@ -241,6 +289,27 @@ describe('scoreTemperature', () => {
     );
     assert.ok(factor.score > 0);
     assert.match(factor.title, /comfort|fresh|range|cool/i);
+  });
+
+  it('penalizes modest net warming in maintain band', () => {
+    const factor = scoreTemperature(
+      75,
+      72,
+      ['dehumidify', 'maintain'],
+      'f',
+      53,
+      50,
+      68,
+      78,
+      {
+        solarIntensity: 1,
+        weather: 'clear',
+        solarHeatingShiftF: 0.36,
+        internalGainShiftF: 1.25,
+      },
+    );
+    assert.ok(factor.score < 0);
+    assert.match(factor.title, /warming/i);
   });
 });
 
@@ -281,7 +350,7 @@ describe('scoreCondensationRisk', () => {
 describe('scoreWeather', () => {
   it('rewards breeze when maintaining with cool outdoor air', () => {
     const factor = scoreWeather(
-      'windy',
+      'cloudy',
       75,
       53,
       64,
@@ -290,6 +359,8 @@ describe('scoreWeather', () => {
       0.9,
       67,
       78,
+      true,
+      15,
     );
     assert.equal(factor.title, 'Breeze improves air exchange');
     assert.equal(factor.impact, 'help');
@@ -307,7 +378,7 @@ describe('scoreWeather', () => {
       71,
       78,
     );
-    assert.equal(factor.title, 'Dark outside — no solar heating');
+    assert.equal(factor.title, 'Dark outside -- no solar heating');
     assert.equal(factor.score, 0);
   });
 

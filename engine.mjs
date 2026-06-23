@@ -1,6 +1,6 @@
 const COMFORT = {
   rhLow: 30,
-  /** Target ceiling — above this feels stuffy/muggy even when temperature is fine. */
+  /** Target ceiling -- above this feels stuffy/muggy even when temperature is fine. */
   rhTargetMax: 50,
   /** Legacy alias used in comparisons. */
   rhIdealHigh: 50,
@@ -47,10 +47,91 @@ function formatComfortRange(tempLowF, tempHighF, unit) {
   return `${formatTemp(tempLowF, unit)}-${formatTemp(tempHighF, unit)}`;
 }
 
-/** Realistic max °F shift for a whole home with sustained window ventilation (not full equilibration). */
-const VENTILATION_MAX_SHIFT_F = 6;
+/** Whole-home average rarely shifts more than this °F from window ventilation alone. */
+const VENTILATION_MAX_SHIFT_F = 18;
+/** Typical occupied-home heat (people, pets, appliances) added to expected shift when HVAC is off. */
+const INTERNAL_GAIN_SHIFT_F = 1.25;
 const DEFAULT_LATITUDE_DEG = 40;
 const TWILIGHT_MINUTES = 30;
+
+function normalizeMinutesOfDay(minutes) {
+  return ((minutes % 1440) + 1440) % 1440;
+}
+
+/** Hours from UTC for local civil time (negative west of Greenwich). */
+function getLocalTimezoneOffsetHours(date = new Date()) {
+  return -date.getTimezoneOffset() / 60;
+}
+
+/** Standard-timezone meridian longitude (east positive) when location is unknown. */
+function estimateLongitudeDeg(date = new Date()) {
+  const year = date.getFullYear();
+  const stdOffsetMin = Math.max(
+    new Date(year, 0, 1).getTimezoneOffset(),
+    new Date(year, 6, 1).getTimezoneOffset(),
+  );
+  return (-stdOffsetMin / 60) * 15;
+}
+
+function solarDeclinationAndEqTime(dayOfYear) {
+  const gamma = ((2 * Math.PI) / 365) * (dayOfYear - 1);
+  const eqTime =
+    229.18 *
+    (0.000075 +
+      0.001868 * Math.cos(gamma) -
+      0.032077 * Math.sin(gamma) -
+      0.014615 * Math.cos(2 * gamma) -
+      0.040849 * Math.sin(2 * gamma));
+  const decl =
+    0.006918 -
+    0.399912 * Math.cos(gamma) +
+    0.070257 * Math.sin(gamma) -
+    0.006758 * Math.cos(2 * gamma) +
+    0.000907 * Math.sin(2 * gamma) -
+    0.002697 * Math.cos(3 * gamma) +
+    0.00148 * Math.sin(3 * gamma);
+  return { eqTime, decl };
+}
+
+function getSunriseSunsetLocalMinutes(
+  latitudeDeg,
+  date,
+  longitudeDeg,
+  timezoneOffsetHours,
+) {
+  const latRad = (latitudeDeg * Math.PI) / 180;
+  const dayOfYear = dayOfYearFromDate(date);
+  const { eqTime, decl } = solarDeclinationAndEqTime(dayOfYear);
+
+  const cosHa =
+    Math.cos((90.833 * Math.PI) / 180) / (Math.cos(latRad) * Math.cos(decl)) -
+    Math.tan(latRad) * Math.tan(decl);
+
+  if (cosHa > 1) {
+    return { sunriseMinutes: 0, sunsetMinutes: 0, polarNight: true };
+  }
+  if (cosHa < -1) {
+    return { sunriseMinutes: 0, sunsetMinutes: 1440, polarDay: true };
+  }
+
+  const hourAngleDeg = (Math.acos(cosHa) * 180) / Math.PI;
+  const solarNoonLocal =
+    720 - 4 * longitudeDeg - eqTime + timezoneOffsetHours * 60;
+  return {
+    sunriseMinutes: normalizeMinutesOfDay(solarNoonLocal - hourAngleDeg * 4),
+    sunsetMinutes: normalizeMinutesOfDay(solarNoonLocal + hourAngleDeg * 4),
+    solarNoonMinutes: normalizeMinutesOfDay(solarNoonLocal),
+  };
+}
+
+function resolveSolarLocation(longitudeDeg, localDate) {
+  const referenceDate = normalizeLocalDate(localDate) ?? new Date();
+  const timezoneOffsetHours = getLocalTimezoneOffsetHours(referenceDate);
+  const resolvedLongitude = Number.isFinite(longitudeDeg)
+    ? longitudeDeg
+    : estimateLongitudeDeg(referenceDate);
+  return { longitudeDeg: resolvedLongitude, timezoneOffsetHours };
+}
 
 function normalizeLocalDate(input) {
   if (input instanceof Date && !Number.isNaN(input.getTime())) {
@@ -71,24 +152,34 @@ function dayOfYearFromDate(date) {
   return Math.floor((date - start) / 86400000);
 }
 
-function getSunriseSunsetLocalMinutes(latitudeDeg, date) {
-  const latRad = (latitudeDeg * Math.PI) / 180;
-  const dayOfYear = dayOfYearFromDate(date);
-  const declRad =
-    ((23.45 * Math.PI) / 180) * Math.sin(((2 * Math.PI) / 365) * (284 + dayOfYear));
-  let cosHourAngle = -Math.tan(latRad) * Math.tan(declRad);
-  cosHourAngle = Math.max(-1, Math.min(1, cosHourAngle));
-  const hourAngleDeg = (Math.acos(cosHourAngle) * 180) / Math.PI;
-  const halfDayMinutes = (hourAngleDeg / 15) * 60;
-  const solarNoon = 12 * 60;
-  return {
-    sunriseMinutes: solarNoon - halfDayMinutes,
-    sunsetMinutes: solarNoon + halfDayMinutes,
-  };
+function getSunriseSunsetLocalMinutesForInputs(latitudeDeg, localDate, longitudeDeg) {
+  const date = normalizeLocalDate(localDate);
+  if (!date || !Number.isFinite(latitudeDeg)) return null;
+  const { longitudeDeg: lon, timezoneOffsetHours } = resolveSolarLocation(longitudeDeg, localDate);
+  return getSunriseSunsetLocalMinutes(latitudeDeg, date, lon, timezoneOffsetHours);
 }
 
-function getSolarIntensityFactor(latitudeDeg, date, timeMinutes) {
-  const { sunriseMinutes, sunsetMinutes } = getSunriseSunsetLocalMinutes(latitudeDeg, date);
+function getSolarIntensityFactor(
+  latitudeDeg,
+  date,
+  timeMinutes,
+  longitudeDeg,
+  timezoneOffsetHours,
+) {
+  const referenceDate = date instanceof Date ? date : normalizeLocalDate(date) ?? new Date();
+  const { longitudeDeg: lon, timezoneOffsetHours: defaultTz } = resolveSolarLocation(
+    longitudeDeg,
+    referenceDate,
+  );
+  const effectiveTz = Number.isFinite(timezoneOffsetHours)
+    ? timezoneOffsetHours
+    : defaultTz;
+  const { sunriseMinutes, sunsetMinutes } = getSunriseSunsetLocalMinutes(
+    latitudeDeg,
+    referenceDate,
+    lon,
+    effectiveTz,
+  );
 
   if (timeMinutes <= sunriseMinutes - TWILIGHT_MINUTES) return 0;
   if (timeMinutes >= sunsetMinutes + TWILIGHT_MINUTES) return 0;
@@ -107,7 +198,13 @@ function getSolarIntensityFactor(latitudeDeg, date, timeMinutes) {
   return Math.cos((t * Math.PI) / 2);
 }
 
-function resolveSolarIntensity(latitudeDeg, localDate, localTimeMinutes) {
+function resolveSolarIntensity(
+  latitudeDeg,
+  localDate,
+  localTimeMinutes,
+  longitudeDeg = null,
+  timezoneOffsetHours = null,
+) {
   const date = normalizeLocalDate(localDate);
   if (
     !date ||
@@ -117,7 +214,13 @@ function resolveSolarIntensity(latitudeDeg, localDate, localTimeMinutes) {
   ) {
     return 1;
   }
-  return getSolarIntensityFactor(latitudeDeg, date, localTimeMinutes);
+  return getSolarIntensityFactor(
+    latitudeDeg,
+    date,
+    localTimeMinutes,
+    longitudeDeg,
+    timezoneOffsetHours,
+  );
 }
 
 function formatClockFromMinutes(minutes) {
@@ -136,8 +239,6 @@ function weatherSolarMultiplier(weather) {
       return 0.12;
     case 'rainy':
       return 0.05;
-    case 'windy':
-      return 1;
     default:
       return 1;
   }
@@ -174,23 +275,22 @@ function capitalizeWord(word) {
 function formatSolarHeatingMetric(effectiveIntensity, skyIntensity, weather) {
   if (skyIntensity <= 0.05) return 'None (night)';
 
-  if (weather === 'windy') {
-    const skyStrength = formatSolarHeatingStrength(skyIntensity);
-    return `${capitalizeWord(skyStrength)} (time only)`;
-  }
-
   const strength = formatSolarHeatingStrength(effectiveIntensity);
   const context = weatherSolarContext(weather);
   if (context) return `${capitalizeWord(strength)} (${context})`;
   return capitalizeWord(strength);
 }
 
-function describeSunlightWindow(latitudeDeg, localDate) {
+function describeSunlightWindow(latitudeDeg, localDate, longitudeDeg = null) {
   const date = normalizeLocalDate(localDate);
   if (!date || !Number.isFinite(latitudeDeg)) {
     return 'Set date and latitude to estimate sunrise and sunset.';
   }
-  const { sunriseMinutes, sunsetMinutes } = getSunriseSunsetLocalMinutes(latitudeDeg, date);
+  const times = getSunriseSunsetLocalMinutesForInputs(latitudeDeg, localDate, longitudeDeg);
+  if (!times) {
+    return 'Set date and latitude to estimate sunrise and sunset.';
+  }
+  const { sunriseMinutes, sunsetMinutes } = times;
   return `Sunrise ~${formatClockFromMinutes(sunriseMinutes)}, sunset ~${formatClockFromMinutes(sunsetMinutes)}`;
 }
 
@@ -202,129 +302,243 @@ function scaleSolarFactor(factor, solarIntensity) {
   };
 }
 
+function ventilationMixFraction(absDelta) {
+  if (absDelta <= 3) return 0.2;
+  if (absDelta <= 6) return 0.3;
+  if (absDelta <= 12) return 0.4;
+  if (absDelta <= 20) return 0.45;
+  return 0.5;
+}
+
 function estimateVentilationTempShiftF(indoorTempF, outdoorTempF) {
   const delta = outdoorTempF - indoorTempF;
   const absDelta = Math.abs(delta);
   if (absDelta < 0.5) return 0;
 
-  let fraction;
-  if (absDelta <= 3) fraction = 0.2;
-  else if (absDelta <= 6) fraction = 0.3;
-  else if (absDelta <= 12) fraction = 0.4;
-  else if (absDelta <= 20) fraction = 0.45;
-  else fraction = 0.5;
-
-  let shift = delta * fraction;
+  let shift = delta * ventilationMixFraction(absDelta);
   if (Math.abs(shift) > VENTILATION_MAX_SHIFT_F) {
     shift = Math.sign(shift) * VENTILATION_MAX_SHIFT_F;
   }
   return shift;
 }
 
-function formatVentilationShift(shiftF, unit) {
-  if (Math.abs(shiftF) < 0.5) return 'little change';
-  if (shiftF < 0) return `roughly ${formatDelta(-shiftF, unit)} cooler`;
-  return `roughly ${formatDelta(shiftF, unit)} warmer`;
-}
-
-function scoreTemperatureMaintainBand(indoorTempF, outdoorTempF, tempLowF, tempHighF, unit) {
+function ventilationShiftIsCapped(indoorTempF, outdoorTempF) {
   const delta = outdoorTempF - indoorTempF;
   const absDelta = Math.abs(delta);
-  const shiftF = estimateVentilationTempShiftF(indoorTempF, outdoorTempF);
+  if (absDelta < 0.5) return false;
+  return Math.abs(delta * ventilationMixFraction(absDelta)) > VENTILATION_MAX_SHIFT_F;
+}
+
+function estimateSolarHeatingShiftF({
+  solarIntensity,
+  weather,
+  indoorTempF,
+  outdoorTempF,
+}) {
+  if (solarIntensity <= 0.05) return 0;
+  if (weather !== 'clear' && weather !== 'partly-cloudy') return 0;
+
+  const delta = outdoorTempF - indoorTempF;
+  const absDelta = Math.abs(delta);
+  const skyFactor = weather === 'clear' ? 1 : 0.55;
+
+  // Whole-home solar load (roof, walls, glazing, interior surfaces) when outdoor air won't net-cool.
+  if (absDelta <= 2) {
+    return 3.5 * solarIntensity * skyFactor;
+  }
+
+  if (absDelta <= 3 && delta < 0) {
+    const fullSolar = 3.5 * solarIntensity * skyFactor;
+    const ventShift = estimateVentilationTempShiftF(indoorTempF, outdoorTempF);
+    const offset = 2.5 * solarIntensity * skyFactor;
+    const partialSolar =
+      ventShift < 0 ? Math.min(offset, Math.abs(ventShift) * 0.6) : offset * 0.5;
+    const blend = 3 - absDelta;
+    return fullSolar * blend + partialSolar * (1 - blend);
+  }
+
+  if (delta < -2) {
+    const offset = 2.5 * solarIntensity * skyFactor;
+    const ventShift = estimateVentilationTempShiftF(indoorTempF, outdoorTempF);
+    if (ventShift < 0) {
+      return Math.min(offset, Math.abs(ventShift) * 0.6);
+    }
+    return offset * 0.5;
+  }
+
+  if (delta > 2) {
+    // Outdoor air is already warmer; ventilation shift captures that warming path.
+    return 0;
+  }
+
+  return 0;
+}
+
+function estimateInternalGainShiftF(needs) {
+  if (needs.includes('warm') && !needs.includes('cool')) return 0;
+  return INTERNAL_GAIN_SHIFT_F;
+}
+
+function describePassiveHeatingSources({
+  solarHeatingShiftF,
+  internalGainShiftF,
+  solarIntensity,
+  weather,
+}) {
+  const sunnySky = weather === 'clear' || weather === 'partly-cloudy';
+  const hasSolar = solarHeatingShiftF >= 1 && sunnySky && solarIntensity >= 0.35;
+  const hasInternal = internalGainShiftF >= 0.5;
+  if (hasSolar && hasInternal) {
+    return 'Solar load plus heat from people, pets, and appliances';
+  }
+  if (hasSolar) return 'Solar load on the building';
+  if (hasInternal) return 'Heat from people, pets, and appliances';
+  return 'Passive heat gain';
+}
+
+function formatVentilationShift(shiftF, unit, { capped = false } = {}) {
+  if (Math.abs(shiftF) < 0.5) return 'little air-temp change';
+  const amount = formatDelta(Math.abs(shiftF), unit);
+  const direction = shiftF < 0 ? 'cooler' : 'warmer';
+  let text = `roughly ${amount} ${direction}`;
+  if (capped) text += ' -- whole home won\'t reach outdoor temp';
+  return text;
+}
+
+function matchedTempBlendFactor(absDelta) {
+  if (absDelta <= 2) return 1;
+  if (absDelta >= 3) return 0;
+  return 3 - absDelta;
+}
+
+function formatExpectedShiftDisplay(shiftF, unit, { capped = false } = {}) {
+  return formatVentilationShift(shiftF, unit, { capped });
+}
+
+function scoreTemperatureMaintainBand(
+  indoorTempF,
+  outdoorTempF,
+  tempLowF,
+  tempHighF,
+  unit,
+  thermalContext = {},
+) {
+  const {
+    solarHeatingShiftF = 0,
+    internalGainShiftF = 0,
+    weather,
+    solarIntensity = 0,
+  } = thermalContext;
+  const airShiftF = estimateVentilationTempShiftF(indoorTempF, outdoorTempF);
+  const shiftF = airShiftF + solarHeatingShiftF + internalGainShiftF;
   const estIndoorF = indoorTempF + shiftF;
   const absShift = Math.abs(shiftF);
-  const outdoorNote = ` (outdoor is ${formatTemp(outdoorTempF, unit)}, but the whole home won't reach that)`;
-
-  if (absDelta <= 2 || absShift < 0.5) {
-    return {
-      score: 3,
-      impact: 'neutral',
-      title: 'Temperature already matched',
-      body: 'Indoor and outdoor temps are close — expect little temperature change from ventilation.',
-      shiftF,
-    };
-  }
-
-  const estInBand = estIndoorF >= tempLowF && estIndoorF <= tempHighF;
-  const estBelowMin = tempLowF - estIndoorF;
   const estAboveMax = estIndoorF - tempHighF;
+  const estBelowMin = tempLowF - estIndoorF;
+  const estInBand = estIndoorF >= tempLowF && estIndoorF <= tempHighF;
+  const shiftDesc = formatVentilationShift(shiftF, unit);
+  const passiveSources = describePassiveHeatingSources({
+    solarHeatingShiftF,
+    internalGainShiftF,
+    solarIntensity,
+    weather,
+  });
+  const outdoorNote = ` (outdoor is ${formatTemp(outdoorTempF, unit)}, but the whole home won't reach that)`;
+  const factorBase = { shiftF, airShiftF, solarHeatingShiftF, internalGainShiftF };
 
-  if (estInBand) {
-    const cooler = shiftF < -0.5;
-    const score = absShift <= 2 ? 18 : absShift <= 5 ? 16 : 12;
+  if (shiftF >= 0.5) {
+    if (estAboveMax > 1.5) {
+      return {
+        score: -16,
+        impact: 'hurt',
+        title: 'Net warming should push temps above comfort',
+        body: `Expect ${shiftDesc} indoors -- likely past your ${formatComfortRange(tempLowF, tempHighF, unit)} range as ${passiveSources.toLowerCase()} outweigh modest outdoor cooling.`,
+        ...factorBase,
+      };
+    }
+    if (estAboveMax > 0) {
+      return {
+        score: -12,
+        impact: 'hurt',
+        title: 'Net warming should exceed your comfort max',
+        body: `Expect ${shiftDesc} indoors, above your ${formatTemp(tempHighF, unit)} maximum -- outdoor air is not cool enough to offset ${passiveSources.toLowerCase()}.`,
+        ...factorBase,
+      };
+    }
+    if (shiftF >= 2) {
+      return {
+        score: -8,
+        impact: 'hurt',
+        title: 'Net warming expected',
+        body: `Expect ${shiftDesc} indoors -- ${passiveSources.toLowerCase()} should outweigh the modest cooling from outdoor air.`,
+        ...factorBase,
+      };
+    }
     return {
-      score,
-      impact: cooler ? 'mixed' : 'help',
-      title: cooler ? 'Good for fresh air — modest shift expected' : 'Ventilation should stay comfortable',
-      body: cooler
-        ? `Expect ${formatVentilationShift(shiftF, unit)} indoors — likely still within your ${formatComfortRange(tempLowF, tempHighF, unit)} range${outdoorNote}.`
-        : `Expect ${formatVentilationShift(shiftF, unit)} indoors — should stay within your comfort range.`,
-      shiftF,
+      score: -4,
+      impact: 'mixed',
+      title: 'Modest net warming expected',
+      body: `Expect ${shiftDesc} indoors -- outdoor air is only slightly cooler, so ${passiveSources.toLowerCase()} may still nudge temps up.`,
+      ...factorBase,
     };
   }
 
-  if (estBelowMin > 0) {
-    if (estBelowMin <= 1.5) {
+  if (shiftF <= -0.5) {
+    if (estBelowMin > 5) {
+      return {
+        score: -28,
+        impact: 'hurt',
+        title: 'Likely too much cooling',
+        body: `Expect ${shiftDesc} indoors -- probably below your ${formatTemp(tempLowF, unit)} minimum${outdoorNote}.`,
+        ...factorBase,
+      };
+    }
+    if (estBelowMin > 3) {
+      return {
+        score: -14,
+        impact: 'mixed',
+        title: 'Some cooling below your minimum',
+        body: `Expect ${shiftDesc} indoors -- may drift below your ${formatTemp(tempLowF, unit)} floor${outdoorNote}.`,
+        ...factorBase,
+      };
+    }
+    if (estBelowMin > 1.5) {
+      return {
+        score: 2,
+        impact: 'mixed',
+        title: 'Slight dip below your range',
+        body: `Expect ${shiftDesc} indoors -- possibly a touch below your ${formatTemp(tempLowF, unit)} minimum if left open long${outdoorNote}.`,
+        ...factorBase,
+      };
+    }
+    if (estBelowMin > 0) {
       return {
         score: 12,
         impact: 'mixed',
         title: 'Slight dip below your range',
-        body: `Expect ${formatVentilationShift(shiftF, unit)} indoors — possibly a touch below your ${formatTemp(tempLowF, unit)} minimum if left open long${outdoorNote}.`,
-        shiftF,
+        body: `Expect ${shiftDesc} indoors -- possibly a touch below your ${formatTemp(tempLowF, unit)} minimum if left open long${outdoorNote}.`,
+        ...factorBase,
       };
     }
-    if (estBelowMin <= 3) {
-      return {
-        score: 2,
-        impact: 'mixed',
-        title: 'Some cooling below your minimum',
-        body: `Expect ${formatVentilationShift(shiftF, unit)} indoors — may drift below your ${formatTemp(tempLowF, unit)} floor${outdoorNote}.`,
-        shiftF,
-      };
-    }
+    const score = absShift >= 5 ? 18 : absShift >= 2 ? 16 : absShift >= 1 ? 12 : 8;
     return {
-      score: estBelowMin >= 5 ? -28 : -14,
-      impact: estBelowMin >= 5 ? 'hurt' : 'mixed',
-      title: 'Likely too much cooling',
-      body: `Expect ${formatVentilationShift(shiftF, unit)} indoors — probably below your ${formatTemp(tempLowF, unit)} minimum${outdoorNote}.`,
-      shiftF,
-    };
-  }
-
-  if (estAboveMax > 0) {
-    if (estAboveMax <= 1.5) {
-      return {
-        score: 10,
-        impact: 'mixed',
-        title: 'Slight rise above your range',
-        body: `Expect ${formatVentilationShift(shiftF, unit)} indoors — possibly a touch above your ${formatTemp(tempHighF, unit)} maximum if left open long${outdoorNote}.`,
-        shiftF,
-      };
-    }
-    if (estAboveMax <= 3) {
-      return {
-        score: 0,
-        impact: 'mixed',
-        title: 'Some warming above your maximum',
-        body: `Expect ${formatVentilationShift(shiftF, unit)} indoors — may drift above your ${formatTemp(tempHighF, unit)} ceiling${outdoorNote}.`,
-        shiftF,
-      };
-    }
-    return {
-      score: estAboveMax >= 5 ? -24 : -12,
-      impact: estAboveMax >= 5 ? 'hurt' : 'mixed',
-      title: 'Likely too much warming',
-      body: `Expect ${formatVentilationShift(shiftF, unit)} indoors — probably above your ${formatTemp(tempHighF, unit)} maximum${outdoorNote}.`,
-      shiftF,
+      score,
+      impact: absShift >= 2 ? 'help' : 'mixed',
+      title:
+        absShift >= 2
+          ? 'Good for fresh air -- modest shift expected'
+          : 'Slight net cooling expected',
+      body: `Expect ${shiftDesc} indoors -- likely still within your ${formatComfortRange(tempLowF, tempHighF, unit)} range${outdoorNote}.`,
+      ...factorBase,
     };
   }
 
   return {
-    score: 0,
+    score: estInBand ? 3 : 0,
     impact: 'neutral',
-    title: 'Temperature impact is neutral',
-    body: 'Ventilation is unlikely to move indoor temperature much.',
-    shiftF,
+    title: 'Little net temperature change',
+    body: 'Indoor and outdoor temps are close -- expect little net temperature change from ventilation.',
+    ...factorBase,
   };
 }
 const VERDICTS = {
@@ -410,7 +624,7 @@ function getDewPoints(indoorTempF, indoorRh, outdoorTempF, outdoorRh) {
   };
 }
 
-/** Outdoor dew point at least thresholdF lower than indoor — ventilation can dry the home. */
+/** Outdoor dew point at least thresholdF lower than indoor -- ventilation can dry the home. */
 function isMuchDrierOutdoor(indoorTempF, indoorRh, outdoorTempF, outdoorRh, thresholdF = 8) {
   const { indoorDp, outdoorDp } = getDewPoints(indoorTempF, indoorRh, outdoorTempF, outdoorRh);
   return indoorDp !== null && outdoorDp !== null && outdoorDp <= indoorDp - thresholdF;
@@ -455,9 +669,9 @@ function formatTempDifference(outdoorTempF, indoorTempF, unit) {
 function formatDewPointDifference(outdoorDpF, indoorDpF, unit) {
   if (isNullish(outdoorDpF) || isNullish(indoorDpF)) return 'N/A';
   const delta = outdoorDpF - indoorDpF;
-  if (Math.abs(delta) < 0.5) return 'About the same';
-  if (delta < 0) return `${formatDelta(-delta, unit)} drier outside`;
-  return `${formatDelta(delta, unit)} moister outside`;
+  if (Math.abs(delta) < 0.5) return 'About the same dew point';
+  if (delta < 0) return `Outdoor dew point ${formatDelta(-delta, unit)} lower`;
+  return `Outdoor dew point ${formatDelta(delta, unit)} higher`;
 }
 
 function scoreTemperatureForMoistureGoal(
@@ -487,7 +701,7 @@ function scoreTemperatureForMoistureGoal(
           score: 4,
           impact: 'mixed',
           title: 'Cold, dry outdoor air can help dry the home',
-          body: `Outdoor dew point is much lower even though air is ${formatDelta(-delta, unit)} cooler — ventilation trades warmth for moisture removal; short bursts work best.`,
+          body: `Outdoor dew point is much lower even though air is ${formatDelta(-delta, unit)} cooler -- ventilation trades warmth for moisture removal; short bursts work best.`,
         };
       }
       return {
@@ -535,7 +749,7 @@ function scoreTemperatureForMoistureGoal(
         score: -15,
         impact: 'hurt',
         title: 'Cold, dry outdoor air worsens dry indoor air',
-        body: `Outdoor air is ${formatDelta(-delta, unit)} cooler and drier — ventilation will strip humidity without warming meaningfully.`,
+        body: `Outdoor air is ${formatDelta(-delta, unit)} cooler and drier -- ventilation will strip humidity without warming meaningfully.`,
       };
     }
     return {
@@ -558,6 +772,7 @@ function scoreTemperature(
   outdoorRh,
   comfortMinF,
   comfortMaxF,
+  thermalContext = {},
 ) {
   const { tempLowF, tempHighF } = normalizeComfortBounds(comfortMinF, comfortMaxF);
   const delta = outdoorTempF - indoorTempF;
@@ -574,7 +789,7 @@ function scoreTemperature(
         score: 30,
         impact: 'help',
         title: 'Outdoor air is much cooler',
-        body: `Outdoor air is ${formatDelta(-delta, unit)} cooler — expect ${formatVentilationShift(shiftF, unit)} indoors, though sunlight warming the home can offset some of the gain.`,
+        body: `Outdoor air is ${formatDelta(-delta, unit)} cooler -- expect ${formatVentilationShift(shiftF, unit)} indoors, though sunlight warming the home can offset some of the gain.`,
       };
     }
     if (delta <= -3) {
@@ -582,7 +797,7 @@ function scoreTemperature(
         score: 14,
         impact: 'mixed',
         title: 'Modest cooling from outdoor air',
-        body: `Outdoor air is ${formatDelta(-delta, unit)} cooler. Expect ${formatVentilationShift(shiftF, unit)} indoors — gradual, and less than the full gap to outside.`,
+        body: `Outdoor air is ${formatDelta(-delta, unit)} cooler. Expect ${formatVentilationShift(shiftF, unit)} indoors -- gradual, and less than the full gap to outside.`,
       };
     }
     if (delta <= 1) {
@@ -591,7 +806,7 @@ function scoreTemperature(
           score: 8,
           impact: 'mixed',
           title: 'Slightly warmer outside, but much drier',
-          body: 'Outdoor air is a touch warmer yet the dew point is notably lower — expect humidity relief with little or no cooling.',
+          body: 'Outdoor air is a touch warmer yet the dew point is notably lower -- expect humidity relief with little or no cooling.',
         };
       }
       return {
@@ -607,13 +822,13 @@ function scoreTemperature(
           score: 2,
           impact: 'mixed',
           title: 'Warmer outside, but drier air may still help',
-          body: `Outdoor air is ${formatDelta(delta, unit)} warmer, yet much lower dew point can ease stuffiness — cooling will be limited.`,
+          body: `Outdoor air is ${formatDelta(delta, unit)} warmer, yet much lower dew point can ease stuffiness -- cooling will be limited.`,
         };
       }
       return {
         score: -22,
         impact: 'hurt',
-        title: 'Outdoor air is warmer — cooling will suffer',
+        title: 'Outdoor air is warmer -- cooling will suffer',
         body: `You would be letting in air about ${formatDelta(delta, unit)} warmer than inside, working against your goal.`,
       };
     }
@@ -622,14 +837,14 @@ function scoreTemperature(
         score: -8,
         impact: 'mixed',
         title: 'Warmer outside, but notably drier',
-        body: `Outdoor air is ${formatDelta(delta, unit)} warmer — cooling suffers, but the lower dew point may still ease stuffiness.`,
+        body: `Outdoor air is ${formatDelta(delta, unit)} warmer -- cooling suffers, but the lower dew point may still ease stuffiness.`,
       };
     }
     return {
       score: -40,
       impact: 'hurt',
       title: 'Outdoor air is much warmer',
-      body: `Opening windows would admit air roughly ${formatDelta(delta, unit)} hotter — likely making the home warmer and stickier.`,
+      body: `Opening windows would admit air roughly ${formatDelta(delta, unit)} hotter -- likely making the home warmer and stickier.`,
     };
   }
 
@@ -639,7 +854,7 @@ function scoreTemperature(
         score: 12,
         impact: 'mixed',
         title: 'Outdoor air could warm the home slowly',
-        body: `Outdoor air is ${formatDelta(delta, unit)} warmer, but window ventilation alone is a weak substitute for running heat — any gain will be uneven and slow.`,
+        body: `Outdoor air is ${formatDelta(delta, unit)} warmer, but window ventilation alone is a weak substitute for running heat -- any gain will be uneven and slow.`,
       };
     }
     if (delta >= 3) {
@@ -663,7 +878,7 @@ function scoreTemperature(
         score: -28,
         impact: 'hurt',
         title: 'Cold outdoor air will steal heat',
-        body: `Outdoor air is about ${formatDelta(-delta, unit)} colder — expect ${formatVentilationShift(shiftF, unit)} indoors, not a full drop to outdoor temp.`,
+        body: `Outdoor air is about ${formatDelta(-delta, unit)} colder -- expect ${formatVentilationShift(shiftF, unit)} indoors, not a full drop to outdoor temp.`,
       };
     }
     return {
@@ -690,13 +905,27 @@ function scoreTemperature(
     !needs.includes('warm');
 
   if (dehumidifyInBand && inComfortBand) {
-    return scoreTemperatureMaintainBand(indoorTempF, outdoorTempF, tempLowF, tempHighF, unit);
+    return scoreTemperatureMaintainBand(
+      indoorTempF,
+      outdoorTempF,
+      tempLowF,
+      tempHighF,
+      unit,
+      thermalContext,
+    );
   }
 
   if (moistureGoal) return moistureGoal;
 
   if (inComfortBand) {
-    return scoreTemperatureMaintainBand(indoorTempF, outdoorTempF, tempLowF, tempHighF, unit);
+    return scoreTemperatureMaintainBand(
+      indoorTempF,
+      outdoorTempF,
+      tempLowF,
+      tempHighF,
+      unit,
+      thermalContext,
+    );
   }
 
   return {
@@ -707,7 +936,10 @@ function scoreTemperature(
   };
 }
 
-function scoreHumidity(indoorTempF, indoorRh, outdoorTempF, outdoorRh, needs) {
+function scoreHumidity(indoorTempF, indoorRh, outdoorTempF, outdoorRh, needs, thermalContext = {}) {
+  const { solarHeatingShiftF = 0, internalGainShiftF = 0 } = thermalContext;
+  const passiveHeatingShiftF = solarHeatingShiftF + internalGainShiftF;
+  const absTempDelta = Math.abs(outdoorTempF - indoorTempF);
   const indoorDp = dewPointFahrenheit(indoorTempF, indoorRh);
   const outdoorDp = dewPointFahrenheit(outdoorTempF, outdoorRh);
   const indoorAh = absoluteHumidityGpm3(indoorTempF, indoorRh);
@@ -721,7 +953,7 @@ function scoreHumidity(indoorTempF, indoorRh, outdoorTempF, outdoorRh, needs) {
   if (needs.includes('dehumidify')) {
     const aboveRhTarget = indoorRh > COMFORT.rhTargetMax;
     const stuffyNote = aboveRhTarget
-      ? ` Indoor humidity (${Math.round(indoorRh)}%) is above your ~50% comfort target — dryness matters as much as temperature.`
+      ? ` Indoor humidity (${Math.round(indoorRh)}%) is above your ~50% comfort target -- dryness matters as much as temperature.`
       : '';
 
     if (dpDelta <= -5) {
@@ -729,17 +961,25 @@ function scoreHumidity(indoorTempF, indoorRh, outdoorTempF, outdoorRh, needs) {
         score: aboveRhTarget ? 28 : 25,
         impact: 'help',
         title: aboveRhTarget
-          ? 'Outdoor air is drier — should ease stuffiness'
-          : 'Outdoor air is drier — humidity should drop',
+          ? 'Outdoor air is drier -- should ease stuffiness'
+          : 'Outdoor air is drier -- humidity should drop',
         body: `Lower outdoor dew point means incoming air can absorb moisture and help dry out stale indoor air.${stuffyNote}`,
       });
     }
     if (dpDelta <= -1) {
+      if (passiveHeatingShiftF >= 1 && absTempDelta <= 2 && dpDelta > -3) {
+        return withDewPoints({
+          score: 0,
+          impact: 'neutral',
+          title: 'Drying benefit too small to offset indoor heat',
+          body: `Outdoor air is only slightly drier, while ${describePassiveHeatingSources(thermalContext).toLowerCase()} should warm the home -- ventilation is unlikely to improve overall comfort.${stuffyNote}`,
+        });
+      }
       return withDewPoints({
         score: aboveRhTarget ? 14 : 10,
         impact: 'mixed',
         title: aboveRhTarget
-          ? 'Modest drying — may help muggy air'
+          ? 'Modest drying -- may help muggy air'
           : 'Slight dehumidifying effect',
         body: `Outdoor moisture levels are a bit lower. You may feel modest relief, but it might not fix a very damp home on its own.${stuffyNote}`,
       });
@@ -749,10 +989,10 @@ function scoreHumidity(indoorTempF, indoorRh, outdoorTempF, outdoorRh, needs) {
         score: aboveRhTarget ? -14 : -8,
         impact: aboveRhTarget ? 'mixed' : 'neutral',
         title: aboveRhTarget
-          ? 'Humidity already high — little relief expected'
+          ? 'Humidity already high -- little relief expected'
           : 'Humidity levels are similar',
         body: aboveRhTarget
-          ? `Indoor and outdoor moisture are close, so ventilation will not pull humidity below your ~50% target — the home may still feel stuffy.${stuffyNote}`
+          ? `Indoor and outdoor moisture are close, so ventilation will not pull humidity below your ~50% target -- the home may still feel stuffy.${stuffyNote}`
           : 'Indoor and outdoor moisture are close, so ventilation alone will not change humidity much.',
       });
     }
@@ -770,7 +1010,7 @@ function scoreHumidity(indoorTempF, indoorRh, outdoorTempF, outdoorRh, needs) {
         score: 15,
         impact: 'help',
         title: 'Outdoor air carries more moisture',
-        body: 'If the home feels dry, outdoor air may add a little humidity — though whole-house change will be gradual.',
+        body: 'If the home feels dry, outdoor air may add a little humidity -- though whole-house change will be gradual.',
       });
     }
     if (ahDelta >= -1) {
@@ -803,7 +1043,7 @@ function scoreHumidity(indoorTempF, indoorRh, outdoorTempF, outdoorRh, needs) {
       score: 6,
       impact: 'mixed',
       title: 'Slightly drier outdoor air',
-      body: 'Could freshen the air and nudge humidity down a touch — helpful if it felt stuffy, unnecessary if already comfortable.',
+      body: 'Could freshen the air and nudge humidity down a touch -- helpful if it felt stuffy, unnecessary if already comfortable.',
     });
   }
 
@@ -835,7 +1075,7 @@ function scoreCondensationRisk(indoorTempF, indoorRh, outdoorTempF, outdoorRh, u
       score: -35,
       impact: 'hurt',
       title: 'High condensation risk on windows',
-      body: `Indoor dew point (${formatTemp(indoorDp, unit)}) is well above likely glass temperature (${formatTemp(glassTempEstimate, unit)}) — expect fogging and water on frames.`,
+      body: `Indoor dew point (${formatTemp(indoorDp, unit)}) is well above likely glass temperature (${formatTemp(glassTempEstimate, unit)}) -- expect fogging and water on frames.`,
     };
   }
 
@@ -844,7 +1084,7 @@ function scoreCondensationRisk(indoorTempF, indoorRh, outdoorTempF, outdoorRh, u
       score: -22,
       impact: 'mixed',
       title: 'Likely window condensation',
-      body: 'Warm, moist indoor air hitting cold glass may bead up — crack windows rather than opening wide, or ventilate in short bursts.',
+      body: 'Warm, moist indoor air hitting cold glass may bead up -- crack windows rather than opening wide, or ventilate in short bursts.',
     };
   }
 
@@ -884,7 +1124,7 @@ function scoreSolarVentilationEffect(
       return {
         score: 0,
         impact: 'neutral',
-        title: 'Dark outside — no solar heating',
+        title: 'Dark outside -- no solar heating',
         body: 'The sun is down, so clear skies are not adding heat to the building right now.',
       };
     }
@@ -912,14 +1152,14 @@ function scoreSolarVentilationEffect(
         score: -4,
         impact: 'mixed',
         title: 'Sun is a factor, but drier air helps',
-        body: 'Sunny skies warm the home through windows, walls, and roof, but much drier outdoor air can still ease stuffiness — shade sun-facing windows if you ventilate.',
+        body: 'Sunny skies warm the home through windows, walls, and roof, but much drier outdoor air can still ease stuffiness -- shade sun-facing windows if you ventilate.',
       });
     }
     return finish({
       score: sunny ? -10 : partlySunny ? -6 : -4,
       impact: 'mixed',
       title: 'Sun can warm the home',
-      body: 'Sunny weather adds heat to the building while warmer outdoor air flows in — ventilation works against your cooling goal.',
+      body: 'Sunny weather adds heat to the building while warmer outdoor air flows in -- ventilation works against your cooling goal.',
     });
   }
 
@@ -928,7 +1168,7 @@ function scoreSolarVentilationEffect(
       return finish({
         score: absDelta >= 8 ? 5 : 3,
         impact: 'help',
-        title: 'Overcast and cool — great for fresh air',
+        title: 'Overcast and cool -- great for fresh air',
         body: 'You\'re already comfortable. Cool, overcast outdoor air should freshen the home without overshooting your range.',
       });
     }
@@ -937,7 +1177,7 @@ function scoreSolarVentilationEffect(
       return finish({
         score: sunny ? 3 : 4,
         impact: 'help',
-        title: sunny ? 'Cool outdoor air — good for fresh air' : 'Cool outdoor air helps',
+        title: sunny ? 'Cool outdoor air -- good for fresh air' : 'Cool outdoor air helps',
         body: 'You\'re already comfortable. Much cooler outdoor air should freshen the home; sun may soften the effect, but you are unlikely to overshoot your range.',
       });
     }
@@ -946,8 +1186,8 @@ function scoreSolarVentilationEffect(
       return finish({
         score: sunny ? 2 : partlySunny ? 3 : 4,
         impact: 'help',
-        title: sunny ? 'Cool outdoor air — good time to freshen up' : 'Cool outdoor air helps',
-        body: 'You\'re already comfortable. Cooler outdoor air should freshen the home and nudge temps down a bit — sunny weather may soften the effect, but you should stay in your comfort range.',
+        title: sunny ? 'Cool outdoor air -- good time to freshen up' : 'Cool outdoor air helps',
+        body: 'You\'re already comfortable. Cooler outdoor air should freshen the home and nudge temps down a bit -- sunny weather may soften the effect, but you should stay in your comfort range.',
       });
     }
 
@@ -964,7 +1204,7 @@ function scoreSolarVentilationEffect(
       score: 0,
       impact: 'neutral',
       title: 'Little temperature change expected',
-      body: 'Indoor and outdoor temps are close — ventilation is mainly for air freshness.',
+      body: 'Indoor and outdoor temps are close -- ventilation is mainly for air freshness.',
     });
   }
 
@@ -984,7 +1224,7 @@ function scoreSolarVentilationEffect(
         impact: sunny ? 'mixed' : 'help',
         title: sunny ? 'Strong cool air, but sun is still a factor' : 'Cool air with mild solar gain',
         body: sunny
-          ? 'Outdoor air is much cooler than inside, so ventilation should still help — but sunlight warming the home will offset some of the gain.'
+          ? 'Outdoor air is much cooler than inside, so ventilation should still help -- but sunlight warming the home will offset some of the gain.'
           : 'Cool outdoor air can pull heat out with less solar heating on the building.',
       });
     }
@@ -993,7 +1233,7 @@ function scoreSolarVentilationEffect(
       return finish({
         score: sunny ? -3 : partlySunny ? -1 : 1,
         impact: 'mixed',
-        title: sunny ? 'Sun competes with modest cooling' : 'Partly sunny — cooling may be uneven',
+        title: sunny ? 'Sun competes with modest cooling' : 'Partly sunny -- cooling may be uneven',
         body: 'Cool outdoor air helps, but sunny weather keeps adding heat to the home and can cancel much of the temperature drop.',
       });
     }
@@ -1003,7 +1243,7 @@ function scoreSolarVentilationEffect(
         score: sunny ? -6 : partlySunny ? -4 : 0,
         impact: 'mixed',
         title: sunny ? 'Sunny day limits net cooling' : 'Expect limited temperature change',
-        body: 'Outdoor air is only modestly cooler; in sunny weather the building keeps gaining heat, so net cooling is often small — openings mainly freshen the air.',
+        body: 'Outdoor air is only modestly cooler; in sunny weather the building keeps gaining heat, so net cooling is often small -- openings mainly freshen the air.',
       });
     }
 
@@ -1021,24 +1261,142 @@ function scoreSolarVentilationEffect(
       impact: sunny ? 'mixed' : 'neutral',
       title: sunny ? 'Sun and warm outdoor air' : 'Warm outdoor air',
       body: sunny
-        ? 'Sunny weather heats the building while warmer outdoor air flows in — an already-comfortable home may slowly feel warmer.'
+        ? 'Sunny weather heats the building while warmer outdoor air flows in -- an already-comfortable home may slowly feel warmer.'
         : 'Warmer outdoor air may nudge an already-comfortable room warmer over time.',
     });
   }
 
-  if (needs.includes('maintain') && absDelta <= 2) {
-    return finish({
-      score: 0,
-      impact: 'neutral',
-      title: sunny ? 'Clear weather — solar heating on the building' : 'Mild weather impact',
-      body: 'Sunlight warms the home through windows and exterior surfaces; at these temps ventilation is mainly for air freshness.',
-    });
+  if (needs.includes('maintain') && absDelta <= 3) {
+    const matchedBlend = matchedTempBlendFactor(absDelta);
+    if (matchedBlend > 0 && (weather === 'clear' || weather === 'partly-cloudy')) {
+      const baseScore = weather === 'clear' ? -8 : -5;
+      return finish({
+        score: Math.round(baseScore * matchedBlend),
+        impact: solarIntensity >= 0.5 * matchedBlend ? 'hurt' : 'mixed',
+        title:
+          weather === 'clear'
+            ? 'Strong solar load on the building'
+            : 'Sun may warm the building',
+        body:
+          'Outdoor air is close to indoor temperature, so ventilation alone will not cool much. Sunlight still heats the roof, walls, and interior.',
+      });
+    }
+    if (matchedBlend > 0) {
+      return finish({
+        score: 0,
+        impact: 'neutral',
+        title: 'Mild weather impact',
+        body: 'Indoor and outdoor temps are close -- ventilation is mainly for air freshness.',
+      });
+    }
   }
 
   return null;
 }
 
-function scoreWeather(
+/** Assumed mph when windy is checked but no speed is entered. */
+const DEFAULT_WIND_SPEED_MPH = 12;
+
+function resolveWindSpeedMph(windy, windSpeedMph) {
+  if (!windy) return null;
+  const speed = Number(windSpeedMph);
+  if (Number.isFinite(speed) && speed >= 0) return speed;
+  return DEFAULT_WIND_SPEED_MPH;
+}
+
+function windExchangeMultiplier(windSpeedMph) {
+  if (windSpeedMph <= 5) return 0.45;
+  if (windSpeedMph <= 12) return 0.75;
+  if (windSpeedMph <= 20) return 1;
+  if (windSpeedMph <= 30) return 1.2;
+  return 1.35;
+}
+
+function mergeWeatherFactors(skyFactor, windFactor) {
+  if (!windFactor) return skyFactor;
+
+  const score = skyFactor.score + windFactor.score;
+  const dominant =
+    Math.abs(windFactor.score) >= Math.abs(skyFactor.score) ? windFactor : skyFactor;
+  const impact =
+    score <= -8
+      ? 'hurt'
+      : score <= -2
+        ? 'mixed'
+        : score >= 8
+          ? 'help'
+          : dominant.impact;
+  const title = dominant.title;
+  const body =
+    skyFactor.score !== 0 && windFactor.score !== 0 && skyFactor.title !== windFactor.title
+      ? `${skyFactor.body} ${windFactor.body}`
+      : dominant.body;
+
+  return { score, impact, title, body };
+}
+
+function scoreWindExchange(
+  indoorTempF,
+  indoorRh,
+  outdoorTempF,
+  outdoorRh,
+  needs,
+  tempLowF,
+  windSpeedMph,
+) {
+  const multiplier = windExchangeMultiplier(windSpeedMph);
+  const scale = (value) => Math.round(value * multiplier);
+  const delta = outdoorTempF - indoorTempF;
+  const shiftF = estimateVentilationTempShiftF(indoorTempF, outdoorTempF);
+  const estIndoorF = indoorTempF + shiftF;
+  const unfavorable =
+    (needs.includes('cool') &&
+      delta > 2 &&
+      !(needs.includes('dehumidify') &&
+        isMuchDrierOutdoor(indoorTempF, indoorRh, outdoorTempF, outdoorRh))) ||
+    (needs.includes('warm') && delta < -5) ||
+    (needs.includes('maintain') && delta > 8) ||
+    (needs.includes('maintain') &&
+      delta < -8 &&
+      estIndoorF < tempLowF - 1.5) ||
+    (needs.includes('dehumidify') &&
+      !needs.includes('cool') &&
+      delta < -15 &&
+      !isMuchDrierOutdoor(indoorTempF, indoorRh, outdoorTempF, outdoorRh, 5));
+
+  if (unfavorable) {
+    return {
+      score: scale(-6),
+      impact: 'mixed',
+      title: 'Wind accelerates unwanted exchange',
+      body:
+        windSpeedMph >= 20
+          ? 'Strong wind pulls outdoor air in faster -- amplifying the temperature or moisture mismatch.'
+          : 'A breeze pulls outdoor air in faster -- amplifying the temperature or moisture mismatch.',
+    };
+  }
+
+  if (needs.includes('maintain') && Math.abs(delta) >= 3 && Math.abs(delta) < 8) {
+    return {
+      score: scale(3),
+      impact: 'neutral',
+      title: 'Breeze helps air exchange',
+      body: 'Wind moves air faster, but the modest indoor/outdoor gap still limits how much temperature or humidity will shift.',
+    };
+  }
+
+  return {
+    score: scale(8),
+    impact: 'help',
+    title: 'Breeze improves air exchange',
+    body:
+      windSpeedMph >= 20
+        ? 'Strong wind flushes stale indoor air quickly, so favorable outdoor conditions do more work in less time.'
+        : 'Wind helps flush stale indoor air faster, so favorable outdoor conditions do more work in less time.',
+  };
+}
+
+function scoreSkyWeather(
   weather,
   indoorTempF,
   indoorRh,
@@ -1046,11 +1404,7 @@ function scoreWeather(
   outdoorRh,
   needs,
   solarIntensity = 1,
-  comfortMinF = COMFORT_DEFAULT_MIN_F,
-  comfortMaxF = COMFORT_DEFAULT_MAX_F,
 ) {
-  const { tempLowF } = normalizeComfortBounds(comfortMinF, comfortMaxF);
-
   switch (weather) {
     case 'rainy': {
       const indoorDp = dewPointFahrenheit(indoorTempF, indoorRh);
@@ -1063,7 +1417,7 @@ function scoreWeather(
           score: -5,
           impact: 'mixed',
           title: 'Rain is awkward, but outdoor air looks drier',
-          body: 'Keep openings small and watch sills — outdoor dew point is lower than inside even though it is raining.',
+          body: 'Keep openings small and watch sills -- outdoor dew point is lower than inside even though it is raining.',
         };
       }
 
@@ -1072,52 +1426,8 @@ function scoreWeather(
         impact: needs.includes('dehumidify') ? 'hurt' : 'mixed',
         title: 'Rain usually means wetter air',
         body: needs.includes('dehumidify')
-          ? 'Rain and post-storm air often carry extra moisture — poor timing if you need to dry the home.'
+          ? 'Rain and post-storm air often carry extra moisture -- poor timing if you need to dry the home.'
           : 'Keep openings smaller and watch sills; rain raises humidity and can blow in water.',
-      };
-    }
-    case 'windy': {
-      const delta = outdoorTempF - indoorTempF;
-      const shiftF = estimateVentilationTempShiftF(indoorTempF, outdoorTempF);
-      const estIndoorF = indoorTempF + shiftF;
-      const unfavorable =
-        (needs.includes('cool') &&
-          delta > 2 &&
-          !(needs.includes('dehumidify') &&
-            isMuchDrierOutdoor(indoorTempF, indoorRh, outdoorTempF, outdoorRh))) ||
-        (needs.includes('warm') && delta < -5) ||
-        (needs.includes('maintain') && delta > 8) ||
-        (needs.includes('maintain') &&
-          delta < -8 &&
-          estIndoorF < tempLowF - 1.5) ||
-        (needs.includes('dehumidify') &&
-          !needs.includes('cool') &&
-          delta < -15 &&
-          !isMuchDrierOutdoor(indoorTempF, indoorRh, outdoorTempF, outdoorRh, 5));
-
-      if (unfavorable) {
-        return {
-          score: -6,
-          impact: 'mixed',
-          title: 'Wind accelerates unwanted exchange',
-          body: 'A strong breeze pulls outdoor air in faster — amplifying the temperature or moisture mismatch.',
-        };
-      }
-
-      if (needs.includes('maintain') && Math.abs(delta) >= 3 && Math.abs(delta) < 8) {
-        return {
-          score: 3,
-          impact: 'neutral',
-          title: 'Breeze helps air exchange',
-          body: 'Wind moves air faster, but the modest indoor/outdoor gap still limits how much temperature or humidity will shift.',
-        };
-      }
-
-      return {
-        score: 8,
-        impact: 'help',
-        title: 'Breeze improves air exchange',
-        body: 'Wind helps flush stale indoor air faster, so favorable outdoor conditions do more work in less time.',
       };
     }
     case 'clear':
@@ -1150,6 +1460,44 @@ function scoreWeather(
   }
 }
 
+function scoreWeather(
+  weather,
+  indoorTempF,
+  indoorRh,
+  outdoorTempF,
+  outdoorRh,
+  needs,
+  solarIntensity = 1,
+  comfortMinF = COMFORT_DEFAULT_MIN_F,
+  comfortMaxF = COMFORT_DEFAULT_MAX_F,
+  windy = false,
+  windSpeedMph = null,
+) {
+  const { tempLowF } = normalizeComfortBounds(comfortMinF, comfortMaxF);
+  const skyFactor = scoreSkyWeather(
+    weather,
+    indoorTempF,
+    indoorRh,
+    outdoorTempF,
+    outdoorRh,
+    needs,
+    solarIntensity,
+  );
+  const resolvedWindMph = resolveWindSpeedMph(windy, windSpeedMph);
+  if (resolvedWindMph === null) return skyFactor;
+
+  const windFactor = scoreWindExchange(
+    indoorTempF,
+    indoorRh,
+    outdoorTempF,
+    outdoorRh,
+    needs,
+    tempLowF,
+    resolvedWindMph,
+  );
+  return mergeWeatherFactors(skyFactor, windFactor);
+}
+
 function pickVerdict(totalScore) {
   if (totalScore >= 45) return VERDICTS.strongGood;
   if (totalScore >= 22) return VERDICTS.good;
@@ -1173,7 +1521,7 @@ function buildHeadline(verdict, needs) {
     case 'good':
       return `Opening windows is likely worthwhile to ${primary}`;
     case 'marginal':
-      return `Opening windows may help a little — but expect modest gains`;
+      return `Opening windows may help a little -- but expect modest gains`;
     case 'not-worth-it':
       return `Probably not worth opening wide right now`;
     case 'likely-worse':
@@ -1209,7 +1557,7 @@ function buildSummary(verdict, tempFactor, humidityFactor, condensationFactor, w
       : `${parts[0].charAt(0).toUpperCase()}${parts[0].slice(1)}${parts.length > 1 ? `, and ${parts.slice(1).join(', ')}` : ''}.`;
 
   if (verdict.level === 'marginal' || verdict.level === 'not-worth-it') {
-    return `${joined} The improvement may be small — try a short airing if you mainly want fresher air.`;
+    return `${joined} The improvement may be small -- try a short airing if you mainly want fresher air.`;
   }
 
   if (verdict.level === 'likely-worse' || verdict.level === 'avoid') {
@@ -1229,17 +1577,38 @@ function evaluateConditions({
   comfortMinF = COMFORT_DEFAULT_MIN_F,
   comfortMaxF = COMFORT_DEFAULT_MAX_F,
   latitudeDeg = DEFAULT_LATITUDE_DEG,
+  longitudeDeg = null,
   localDate = null,
   localTimeMinutes = null,
+  windy = false,
+  windSpeedMph = null,
 }) {
   const comfortBand = normalizeComfortBounds(comfortMinF, comfortMaxF);
-  const solarIntensity = resolveSolarIntensity(latitudeDeg, localDate, localTimeMinutes);
+  const solarIntensity = resolveSolarIntensity(
+    latitudeDeg,
+    localDate,
+    localTimeMinutes,
+    longitudeDeg,
+  );
   const needs = inferIndoorNeeds(
     indoorTempF,
     indoorRh,
     comfortBand.tempLowF,
     comfortBand.tempHighF,
   );
+  const solarHeatingShiftF = estimateSolarHeatingShiftF({
+    solarIntensity,
+    weather,
+    indoorTempF,
+    outdoorTempF,
+  });
+  const internalGainShiftF = estimateInternalGainShiftF(needs);
+  const thermalContext = {
+    solarIntensity,
+    weather,
+    solarHeatingShiftF,
+    internalGainShiftF,
+  };
   const tempFactor = scoreTemperature(
     indoorTempF,
     outdoorTempF,
@@ -1249,6 +1618,7 @@ function evaluateConditions({
     outdoorRh,
     comfortBand.tempLowF,
     comfortBand.tempHighF,
+    thermalContext,
   );
   const humidityFactor = scoreHumidity(
     indoorTempF,
@@ -1256,6 +1626,7 @@ function evaluateConditions({
     outdoorTempF,
     outdoorRh,
     needs,
+    thermalContext,
   );
   const condensationFactor = scoreCondensationRisk(
     indoorTempF,
@@ -1274,6 +1645,8 @@ function evaluateConditions({
     solarIntensity,
     comfortBand.tempLowF,
     comfortBand.tempHighF,
+    windy,
+    windSpeedMph,
   );
 
   const totalScore =
@@ -1284,6 +1657,8 @@ function evaluateConditions({
 
   const verdict = pickVerdict(totalScore);
   const ventilationShiftF = estimateVentilationTempShiftF(indoorTempF, outdoorTempF);
+  const ventilationShiftCapped = ventilationShiftIsCapped(indoorTempF, outdoorTempF);
+  const expectedShiftF = ventilationShiftF + solarHeatingShiftF + internalGainShiftF;
 
   return {
     needs,
@@ -1291,7 +1666,11 @@ function evaluateConditions({
     totalScore,
     comfortBand,
     ventilationShiftF,
-    estimatedIndoorF: indoorTempF + ventilationShiftF,
+    solarHeatingShiftF,
+    internalGainShiftF,
+    expectedShiftF,
+    ventilationShiftCapped,
+    estimatedIndoorF: indoorTempF + expectedShiftF,
     solarIntensity,
     tempFactor,
     humidityFactor,
@@ -1307,6 +1686,7 @@ export {
   COMFORT_MIN_SPAN_F,
   COMFORT_LEGACY_TOLERANCE_F,
   VENTILATION_MAX_SHIFT_F,
+  INTERNAL_GAIN_SHIFT_F,
   DEFAULT_LATITUDE_DEG,
   TWILIGHT_MINUTES,
   VERDICTS,
@@ -1316,6 +1696,10 @@ export {
   normalizeLocalDate,
   dayOfYearFromDate,
   getSunriseSunsetLocalMinutes,
+  getSunriseSunsetLocalMinutesForInputs,
+  getLocalTimezoneOffsetHours,
+  estimateLongitudeDeg,
+  resolveSolarLocation,
   getSolarIntensityFactor,
   resolveSolarIntensity,
   formatClockFromMinutes,
@@ -1326,7 +1710,11 @@ export {
   describeSunlightWindow,
   scaleSolarFactor,
   estimateVentilationTempShiftF,
+  estimateSolarHeatingShiftF,
+  estimateInternalGainShiftF,
+  ventilationShiftIsCapped,
   formatVentilationShift,
+  formatExpectedShiftDisplay,
   scoreTemperatureMaintainBand,
   toFahrenheit,
   fromFahrenheit,

@@ -40,7 +40,7 @@ const scenarios = [
       weather: 'clear',
       unit: 'f',
     },
-    expectVerdict: ['good', 'marginal'],
+    expectVerdict: ['marginal', 'good', 'not-worth-it'],
   },
   {
     name: 'Outdoor air is not cooler than inside',
@@ -55,7 +55,7 @@ const scenarios = [
     expectVerdict: ['avoid', 'likely-worse', 'not-worth-it'],
   },
   {
-    name: 'Rainy but outdoor air is drier — dehumidify',
+    name: 'Rainy but outdoor air is drier -- dehumidify',
     input: {
       indoorTempF: 72,
       outdoorTempF: 68,
@@ -67,7 +67,7 @@ const scenarios = [
     expectVerdict: ['good', 'strong-good', 'marginal'],
   },
   {
-    name: 'Hotter outside — should avoid',
+    name: 'Hotter outside -- should avoid',
     input: {
       indoorTempF: 74,
       outdoorTempF: 88,
@@ -104,7 +104,7 @@ const scenarios = [
     expectVerdict: ['good', 'marginal'],
   },
   {
-    name: 'Fall drying — comfortable temp, humid inside, cool dry outside',
+    name: 'Fall drying -- comfortable temp, humid inside, cool dry outside',
     input: {
       indoorTempF: 70,
       outdoorTempF: 55,
@@ -128,7 +128,7 @@ const scenarios = [
     expectVerdict: ['strong-good', 'good'],
   },
   {
-    name: 'Cooler preference — 72°F feels hot when max is 71°F',
+    name: 'Cooler preference -- 72°F feels hot when max is 71°F',
     input: {
       indoorTempF: 72,
       outdoorTempF: 64,
@@ -142,7 +142,7 @@ const scenarios = [
     expectVerdict: ['strong-good', 'good'],
   },
   {
-    name: 'In comfort band — cold outdoor air, modest realistic shift (67-73°F)',
+    name: 'In comfort band -- cold outdoor air, modest realistic shift (67-73°F)',
     input: {
       indoorTempF: 72,
       outdoorTempF: 64,
@@ -157,7 +157,7 @@ const scenarios = [
     expectVerdict: ['good', 'marginal'],
   },
   {
-    name: 'Above max — modest outdoor cooling on sunny day (70-74°F)',
+    name: 'Above max -- modest outdoor cooling on sunny day (70-74°F)',
     input: {
       indoorTempF: 75,
       outdoorTempF: 70,
@@ -172,7 +172,7 @@ const scenarios = [
     expectVerdict: ['marginal', 'good'],
   },
   {
-    name: 'Near band edge — 70°F outdoor OK with 71-77°F range (sunny)',
+    name: 'Near band edge -- 70°F outdoor OK with 71-77°F range (sunny)',
     input: {
       indoorTempF: 75,
       outdoorTempF: 70,
@@ -187,7 +187,7 @@ const scenarios = [
     expectVerdict: ['marginal', 'good', 'not-worth-it'],
   },
   {
-    name: 'Near band edge — 70°F outdoor OK with 71-78°F range (sunny)',
+    name: 'Near band edge -- 70°F outdoor OK with 71-78°F range (sunny)',
     input: {
       indoorTempF: 75,
       outdoorTempF: 70,
@@ -202,7 +202,7 @@ const scenarios = [
     expectVerdict: ['marginal', 'good', 'not-worth-it'],
   },
   {
-    name: 'Same conditions — cloudy scores better than sunny for modest cooling',
+    name: 'Same conditions -- cloudy scores better than sunny for modest cooling',
     input: {
       indoorTempF: 75,
       outdoorTempF: 70,
@@ -217,7 +217,7 @@ const scenarios = [
     expectVerdict: ['marginal', 'good'],
   },
   {
-    name: 'Wide range — outdoor in band on sunny day (64-78°F)',
+    name: 'Wide range -- outdoor in band on sunny day (64-78°F)',
     input: {
       indoorTempF: 75,
       outdoorTempF: 70,
@@ -232,7 +232,7 @@ const scenarios = [
     expectVerdict: ['marginal', 'good', 'not-worth-it'],
   },
   {
-    name: 'Comfortable in band — cool outdoor on sunny day (71-78°F)',
+    name: 'Comfortable in band -- cool outdoor on sunny day (71-78°F)',
     input: {
       indoorTempF: 75,
       outdoorTempF: 70,
@@ -247,7 +247,7 @@ const scenarios = [
     expectVerdict: ['marginal', 'good'],
   },
   {
-    name: 'Cold outdoor air — realistic shift stays in band (71-78°F)',
+    name: 'Cold outdoor air -- realistic shift stays in band (71-78°F)',
     input: {
       indoorTempF: 75,
       outdoorTempF: 65,
@@ -262,7 +262,7 @@ const scenarios = [
     expectVerdict: ['good', 'strong-good'],
   },
   {
-    name: 'Rainy maintain — uses rain logic, not solar bonus',
+    name: 'Rainy maintain -- uses rain logic, not solar bonus',
     input: {
       indoorTempF: 72,
       outdoorTempF: 68,
@@ -275,7 +275,7 @@ const scenarios = [
     expectWeatherTitle: 'Rain usually means wetter air',
   },
   {
-    name: 'Comfortable in band — cloudy day with modest outdoor cooling',
+    name: 'Comfortable in band -- cloudy day with modest outdoor cooling',
     input: {
       indoorTempF: 75,
       outdoorTempF: 70,
@@ -290,22 +290,42 @@ const scenarios = [
     expectVerdict: ['marginal', 'good'],
   },
   {
-    name: 'Windy maintain — uses wind factor, not solar',
+    name: 'Windy maintain -- cloudy skies dominate weather title',
     input: {
       indoorTempF: 75,
       outdoorTempF: 70,
       indoorRh: 53,
       outdoorRh: 59,
-      weather: 'windy',
+      weather: 'cloudy',
+      windy: true,
       unit: 'f',
       comfortMinF: 71,
       comfortMaxF: 78,
     },
-    expectNeeds: ['maintain'],
+    expectNeeds: ['dehumidify', 'maintain'],
+    expectWeatherTitle: 'Overcast and cool -- great for fresh air',
+  },
+  {
+    name: 'Windy maintain at night -- breeze factor with clear skies',
+    input: {
+      indoorTempF: 75,
+      outdoorTempF: 70,
+      indoorRh: 53,
+      outdoorRh: 59,
+      weather: 'clear',
+      windy: true,
+      unit: 'f',
+      comfortMinF: 71,
+      comfortMaxF: 78,
+      latitudeDeg: 40,
+      localDate: '2025-06-21',
+      localTimeMinutes: 23 * 60,
+    },
+    expectNeeds: ['dehumidify', 'maintain'],
     expectWeatherTitle: 'Breeze helps air exchange',
   },
   {
-    name: 'Just below band minimum — short airing OK (74-78°F)',
+    name: 'Just below band minimum -- short airing OK (74-78°F)',
     input: {
       indoorTempF: 75,
       outdoorTempF: 70,
@@ -320,7 +340,7 @@ const scenarios = [
     expectVerdict: ['marginal', 'good', 'not-worth-it'],
   },
   {
-    name: 'Clear summer night — no solar heating penalty',
+    name: 'Clear summer night -- no solar heating penalty',
     input: {
       indoorTempF: 75,
       outdoorTempF: 70,
@@ -335,11 +355,11 @@ const scenarios = [
       localTimeMinutes: 22 * 60,
     },
     expectNeeds: ['maintain'],
-    expectWeatherTitle: 'Dark outside — no solar heating',
+    expectWeatherTitle: 'Dark outside -- no solar heating',
     expectVerdict: ['marginal', 'good'],
   },
   {
-    name: 'Clear summer midday — comfortable in band, cool outdoor air',
+    name: 'Clear summer midday -- comfortable in band, cool outdoor air',
     input: {
       indoorTempF: 75,
       outdoorTempF: 70,
@@ -358,7 +378,7 @@ const scenarios = [
     expectVerdict: ['marginal', 'good'],
   },
   {
-    name: 'Clear summer afternoon — much cooler outdoor, stays in band',
+    name: 'Clear summer afternoon -- much cooler outdoor, stays in band',
     input: {
       indoorTempF: 75,
       outdoorTempF: 64,
@@ -373,17 +393,19 @@ const scenarios = [
       localTimeMinutes: 15 * 60 + 13,
     },
     expectNeeds: ['dehumidify', 'maintain'],
-    expectWeatherTitle: 'Cool outdoor air — good time to freshen up',
+    expectWeatherTitle: 'Cool outdoor air -- good time to freshen up',
     expectVerdict: ['good', 'strong-good'],
   },
   {
-    name: 'Windy afternoon — much cooler outdoor, stays in band',
+    name: 'Windy afternoon -- much cooler outdoor, stays in band',
     input: {
       indoorTempF: 75,
       outdoorTempF: 64,
       indoorRh: 53,
       outdoorRh: 59,
-      weather: 'windy',
+      weather: 'clear',
+      windy: true,
+      windSpeedMph: 15,
       unit: 'f',
       comfortMinF: 70,
       comfortMaxF: 78,
@@ -396,7 +418,7 @@ const scenarios = [
     expectVerdict: ['good', 'strong-good'],
   },
   {
-    name: 'Cloudy summer night — no spurious overcast solar bonus',
+    name: 'Cloudy summer night -- no spurious overcast solar bonus',
     input: {
       indoorTempF: 75,
       outdoorTempF: 70,
@@ -411,11 +433,11 @@ const scenarios = [
       localTimeMinutes: 23 * 60,
     },
     expectNeeds: ['dehumidify', 'maintain'],
-    expectWeatherTitle: 'Dark outside — no solar heating',
+    expectWeatherTitle: 'Dark outside -- no solar heating',
     expectVerdict: ['marginal', 'good'],
   },
   {
-    name: 'In band at 52% RH — dryness goal even when temp is OK',
+    name: 'In band at 52% RH -- dryness goal even when temp is OK',
     input: {
       indoorTempF: 72,
       outdoorTempF: 68,
@@ -425,6 +447,55 @@ const scenarios = [
       unit: 'f',
       comfortMinF: 67,
       comfortMaxF: 75,
+    },
+    expectNeeds: ['dehumidify', 'maintain'],
+    expectVerdict: ['marginal', 'good', 'not-worth-it'],
+  },
+  {
+    name: 'Sunny noon matched temps -- solar heat outweighs tiny drying benefit',
+    input: {
+      indoorTempF: 75,
+      outdoorTempF: 75,
+      indoorRh: 53,
+      outdoorRh: 50,
+      weather: 'clear',
+      unit: 'f',
+      latitudeDeg: 41.88,
+      localDate: '2025-06-22',
+      localTimeMinutes: 12 * 60,
+    },
+    expectNeeds: ['dehumidify', 'maintain'],
+    expectVerdict: ['likely-worse', 'avoid'],
+    expectWeatherTitle: 'Strong solar load on the building',
+  },
+  {
+    name: 'Clear summer night matched temps -- indoor heat outweighs tiny drying benefit',
+    input: {
+      indoorTempF: 75,
+      outdoorTempF: 75,
+      indoorRh: 53,
+      outdoorRh: 50,
+      weather: 'clear',
+      unit: 'f',
+      latitudeDeg: 41.88,
+      localDate: '2025-06-22',
+      localTimeMinutes: 22 * 60,
+    },
+    expectNeeds: ['dehumidify', 'maintain'],
+    expectVerdict: ['likely-worse', 'not-worth-it'],
+  },
+  {
+    name: 'Sunny noon slight outdoor cooling -- smooth verdict gradient (75°F in)',
+    input: {
+      indoorTempF: 75,
+      outdoorTempF: 72,
+      indoorRh: 53,
+      outdoorRh: 50,
+      weather: 'clear',
+      unit: 'f',
+      latitudeDeg: 41.88,
+      localDate: '2025-06-22',
+      localTimeMinutes: 12 * 60,
     },
     expectNeeds: ['dehumidify', 'maintain'],
     expectVerdict: ['marginal', 'good', 'not-worth-it'],

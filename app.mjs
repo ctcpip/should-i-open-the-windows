@@ -7,13 +7,14 @@ import {
   buildSummary,
   comfortBoundsFromLegacyTarget,
   describeSunlightWindow,
+  estimateLongitudeDeg,
   evaluateConditions,
   formatComfortRange,
   formatDewPointDifference,
   formatSolarHeatingMetric,
   formatTemp,
   formatTempDifference,
-  formatVentilationShift,
+  formatExpectedShiftDisplay,
   fromFahrenheit,
   isNullish,
   normalizeComfortBounds,
@@ -28,7 +29,6 @@ const WEATHER_OPTIONS = new Set([
   'partly-cloudy',
   'cloudy',
   'rainy',
-  'windy',
 ]);
 
 const elements = {
@@ -39,9 +39,13 @@ const elements = {
   outdoorTemp: document.getElementById('outdoor-temp'),
   outdoorHumidity: document.getElementById('outdoor-humidity'),
   weather: document.getElementById('weather'),
+  windy: document.getElementById('windy'),
+  windSpeed: document.getElementById('wind-speed'),
+  windSpeedField: document.getElementById('wind-speed-field'),
   localDate: document.getElementById('local-date'),
   localTime: document.getElementById('local-time'),
   latitude: document.getElementById('latitude'),
+  longitude: document.getElementById('longitude'),
   sunlightHint: document.getElementById('sunlight-hint'),
   evaluateBtn: document.getElementById('evaluate-btn'),
   resultsPlaceholder: document.getElementById('results-placeholder'),
@@ -134,10 +138,13 @@ function parseLocalTimeMinutes(timeValue) {
 
 function getSolarInputs() {
   const latitudeDeg = Number(elements.latitude?.value ?? DEFAULT_LATITUDE_DEG);
+  const rawLongitude = elements.longitude?.value?.trim();
+  const parsedLongitude = rawLongitude === '' ? null : Number(rawLongitude);
   const localDate = elements.localDate?.value || null;
   const localTimeMinutes = parseLocalTimeMinutes(elements.localTime?.value);
   return {
     latitudeDeg: Number.isFinite(latitudeDeg) ? latitudeDeg : DEFAULT_LATITUDE_DEG,
+    longitudeDeg: Number.isFinite(parsedLongitude) ? parsedLongitude : null,
     localDate,
     localTimeMinutes,
   };
@@ -160,13 +167,40 @@ function initSunlightInputs() {
     elements.latitude.value = String(DEFAULT_LATITUDE_DEG);
   }
 
+  if (elements.longitude && !elements.longitude.value) {
+    elements.longitude.value = String(Math.round(estimateLongitudeDeg(now) * 10) / 10);
+  }
+
   updateSunlightHint();
 }
 
 function updateSunlightHint() {
   if (!elements.sunlightHint) return;
-  const { latitudeDeg, localDate } = getSolarInputs();
-  elements.sunlightHint.textContent = describeSunlightWindow(latitudeDeg, localDate);
+  const { latitudeDeg, longitudeDeg, localDate } = getSolarInputs();
+  elements.sunlightHint.textContent = describeSunlightWindow(
+    latitudeDeg,
+    localDate,
+    longitudeDeg,
+  );
+}
+
+function updateWindSpeedFieldVisibility() {
+  if (!elements.windSpeedField || !elements.windy) return;
+  elements.windSpeedField.hidden = !elements.windy.checked;
+}
+
+function getWindInputs() {
+  const windy = Boolean(elements.windy?.checked);
+  if (!windy) return { windy: false, windSpeedMph: null };
+
+  const raw = elements.windSpeed?.value?.trim();
+  if (!raw) return { windy: true, windSpeedMph: null };
+
+  const speed = Number(raw);
+  return {
+    windy: true,
+    windSpeedMph: Number.isFinite(speed) ? speed : null,
+  };
 }
 
 function evaluate() {
@@ -190,9 +224,23 @@ function evaluate() {
     return;
   }
 
-  const { latitudeDeg, localDate, localTimeMinutes } = getSolarInputs();
+  const { latitudeDeg, longitudeDeg, localDate, localTimeMinutes } = getSolarInputs();
   if (latitudeDeg < -60 || latitudeDeg > 70) {
     showValidation('Latitude must be between -60 and 70.');
+    return;
+  }
+
+  if (
+    longitudeDeg !== null &&
+    (!Number.isFinite(longitudeDeg) || longitudeDeg < -180 || longitudeDeg > 180)
+  ) {
+    showValidation('Longitude must be between -180 and 180.');
+    return;
+  }
+
+  const { windy, windSpeedMph } = getWindInputs();
+  if (windy && windSpeedMph !== null && (windSpeedMph < 0 || windSpeedMph > 75)) {
+    showValidation('Wind speed must be between 0 and 75 mph.');
     return;
   }
 
@@ -206,10 +254,13 @@ function evaluate() {
     indoorRh,
     outdoorRh,
     weather: elements.weather.value,
+    windy,
+    windSpeedMph,
     unit,
     comfortMinF,
     comfortMaxF,
     latitudeDeg,
+    longitudeDeg,
     localDate,
     localTimeMinutes,
   });
@@ -218,7 +269,8 @@ function evaluate() {
     needs,
     verdict,
     comfortBand,
-    ventilationShiftF,
+    expectedShiftF,
+    ventilationShiftCapped,
     tempFactor,
     humidityFactor,
     condensationFactor,
@@ -241,9 +293,13 @@ function evaluate() {
 
   elements.metrics.replaceChildren(
     renderMetric('Temp difference', formatTempDifference(outdoorTempF, indoorTempF, unit)),
-    renderMetric('Expected shift', formatVentilationShift(ventilationShiftF, unit)),
     renderMetric(
-      'Moisture difference',
+      'Expected shift',
+      formatExpectedShiftDisplay(expectedShiftF, unit, { capped: ventilationShiftCapped }),
+    ),
+    renderMetric('Est. indoor temp', formatTemp(result.estimatedIndoorF, unit)),
+    renderMetric(
+      'Dew point gap',
       formatDewPointDifference(humidityFactor.outdoorDp, humidityFactor.indoorDp, unit),
     ),
     renderMetric('Indoor dew point', formatTemp(humidityFactor.indoorDp, unit)),
@@ -357,6 +413,7 @@ function initComfortSliders() {
 
 function getFormState() {
   const { tempLowF, tempHighF } = getComfortBoundsF();
+  const { windy, windSpeedMph } = getWindInputs();
   return {
     unit: getUnit(),
     indoorTemp: elements.indoorTemp.value,
@@ -364,9 +421,14 @@ function getFormState() {
     outdoorTemp: elements.outdoorTemp.value,
     outdoorHumidity: elements.outdoorHumidity.value,
     weather: elements.weather.value,
+    windy,
+    windSpeedMph: windy && windSpeedMph !== null ? windSpeedMph : '',
     comfortMinF: tempLowF,
     comfortMaxF: tempHighF,
     latitudeDeg: Number(elements.latitude?.value) || DEFAULT_LATITUDE_DEG,
+    ...(Number.isFinite(Number(elements.longitude?.value))
+      ? { longitudeDeg: Number(elements.longitude.value) }
+      : {}),
   };
 }
 
@@ -375,7 +437,7 @@ function saveFormState() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(getFormState()));
   }
   catch {
-    // Storage unavailable or full — ignore.
+    // Storage unavailable or full -- ignore.
   }
 }
 
@@ -400,12 +462,32 @@ function loadFormState() {
       elements.outdoorHumidity.value = String(state.outdoorHumidity);
     }
 
-    if (typeof state.weather === 'string' && WEATHER_OPTIONS.has(state.weather)) {
-      elements.weather.value = state.weather;
+    if (typeof state.weather === 'string') {
+      if (state.weather === 'windy') {
+        elements.weather.value = 'partly-cloudy';
+        if (elements.windy) elements.windy.checked = true;
+      }
+      else if (WEATHER_OPTIONS.has(state.weather)) {
+        elements.weather.value = state.weather;
+      }
     }
+
+    if (typeof state.windy === 'boolean' && elements.windy) {
+      elements.windy.checked = state.windy;
+    }
+
+    if (!isNullish(state.windSpeedMph) && elements.windSpeed) {
+      elements.windSpeed.value = String(state.windSpeedMph);
+    }
+
+    updateWindSpeedFieldVisibility();
 
     if (typeof state.latitudeDeg === 'number' && Number.isFinite(state.latitudeDeg)) {
       elements.latitude.value = String(state.latitudeDeg);
+    }
+
+    if (typeof state.longitudeDeg === 'number' && Number.isFinite(state.longitudeDeg)) {
+      elements.longitude.value = String(state.longitudeDeg);
     }
 
     if (typeof state.comfortMinF === 'number' && typeof state.comfortMaxF === 'number') {
@@ -435,7 +517,7 @@ function loadFormState() {
     }
   }
   catch {
-    // Corrupt or unreadable saved data — keep HTML defaults.
+    // Corrupt or unreadable saved data -- keep HTML defaults.
   }
 }
 
@@ -497,15 +579,18 @@ const inputElements = [
   elements.outdoorTemp,
   elements.outdoorHumidity,
   elements.weather,
+  elements.windy,
+  elements.windSpeed,
   elements.localDate,
   elements.localTime,
   elements.latitude,
+  elements.longitude,
 ];
 
 inputElements.forEach((el) => {
   if (!el) return;
   const refreshSunlightHint =
-    el === elements.localDate || el === elements.latitude;
+    el === elements.localDate || el === elements.latitude || el === elements.longitude;
   el.addEventListener('input', () => {
     if (refreshSunlightHint) updateSunlightHint();
     onInputChange();
@@ -519,7 +604,15 @@ inputElements.forEach((el) => {
   });
 });
 
+if (elements.windy) {
+  elements.windy.addEventListener('change', () => {
+    updateWindSpeedFieldVisibility();
+    onInputChange();
+  });
+}
+
 loadFormState();
+updateWindSpeedFieldVisibility();
 initSunlightInputs();
 initComfortSliders();
 updateUnitLabels();

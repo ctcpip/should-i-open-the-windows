@@ -12,9 +12,10 @@ Recommendations assume **heating and cooling are off**. Running HVAC while venti
 
 | Input                                | Purpose                                                   |
 | ------------------------------------ | --------------------------------------------------------- |
-| **Date, time, latitude**             | Estimate sunrise/sunset and solar heating on the building |
+| **Date, time, latitude, longitude**  | Estimate sunrise/sunset and solar heating on the building |
 | **Indoor / outdoor temp & humidity** | Core comparison (°F or °C)                                |
-| **Weather**                          | Clear, partly cloudy, cloudy, rainy, or windy             |
+| **Sky conditions**                   | Clear, partly cloudy, cloudy, or rainy                    |
+| **Wind**                             | Optional breezy/windy toggle and average wind speed (mph) |
 | **Comfort range**                    | Your acceptable indoor temperature band (60-80°F)         |
 | **Evaluate**                         | Runs the engine and shows a detailed breakdown            |
 
@@ -24,16 +25,20 @@ Date and time reset to **now** on every page load. Other inputs are saved in `lo
 
 The engine scores four factors and combines them into a verdict:
 
-1. **Temperature** — Will ventilation help you cool down, warm up, or stay comfortable? Uses a _partial shift_ model (whole-home ventilation moves indoor temp toward outdoor, but typically only a fraction of the gap — capped at ~6°F).
-2. **Humidity** — Dew point comparison. Indoor RH above **~50%** triggers a dryness goal; high humidity can feel stuffy even when temperature is fine.
-3. **Condensation** — Risk of fogging / water on window glass when warm moist indoor air meets cold outdoor glass.
-4. **Weather** — Solar heating (time-of-day + sky conditions), rain, and wind effects on air exchange.
+- **Temperature**
+  - Will ventilation help you cool down, warm up, or stay comfortable? Uses a _partial shift_ model: indoor temp moves partway toward outdoor (20-50% of the gap, capped at ~18°F for the whole home).
+- **Humidity**
+  - Dew point comparison. Indoor RH above **~50%** triggers a dryness goal; high humidity can feel stuffy even when temperature is fine.
+- **Condensation**
+  - Risk of fogging / water on window glass when warm moist indoor air meets cold outdoor glass.
+- **Weather**
+  - Solar heating (time-of-day + sky conditions), rain, and optional wind for air exchange.
 
 Verdict levels range from **Strong yes** to **Avoid opening**, with factor-by-factor explanations in the results panel.
 
 ## Caveats
 
-- Heuristics, not physics simulation — useful for everyday decisions, not HVAC design.
+- Heuristics, not physics simulation -- useful for everyday decisions, not HVAC design.
 - Does not account for air quality, pollen, allergies, noise, security, or rain blowing in.
-- Solar and sunrise/sunset calculations are approximate.
+- Solar and sunrise/sunset use the [NOAA solar equations](https://gml.noaa.gov/grad/solcalc/calcdetails.html).
 - When in doubt, crack windows briefly instead of opening wide.

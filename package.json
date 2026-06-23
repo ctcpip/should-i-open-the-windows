@@ -12,7 +12,7 @@
   "scripts": {
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "test": "node --test test-engine.mjs && node test-scenarios.mjs"
+    "test": "eslint . && node --test test-engine.mjs && node test-scenarios.mjs"
   },
   "devDependencies": {
     "eslint": "^9.39.4",
